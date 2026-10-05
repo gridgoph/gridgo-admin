@@ -110,6 +110,7 @@ function RootStack() {
         contentStyle: { backgroundColor: token.canvas },
       }}
     >
+      <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Protected guard={!signedIn}>
         <Stack.Screen name="sign-in" options={{ headerShown: false }} />
         <Stack.Screen name="sso-callback" options={{ headerShown: false, title: "Signing in" }} />

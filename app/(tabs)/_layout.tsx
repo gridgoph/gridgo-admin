@@ -63,6 +63,7 @@ export default function TabsLayout() {
           fontSize: typography.caption.fontSize,
         },
         tabBarHideOnKeyboard: true,
+        tabBarLabelPosition: "below-icon",
       }}
     >
       <Tabs.Protected guard={tabs.scan}>

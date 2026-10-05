@@ -1,6 +1,6 @@
 import { ExternalLink } from "lucide-react-native";
 import { useState } from "react";
-import { ActivityIndicator, FlatList, Linking, Pressable, RefreshControl, Text, View } from "react-native";
+import { ActivityIndicator, FlatList, Linking, Pressable, RefreshControl, SectionList, Text, View } from "react-native";
 
 import { EmptyState } from "@/components/EmptyState";
 import { HandoutRow } from "@/components/HandoutRow";
@@ -21,7 +21,7 @@ import {
   type StaffTotal,
 } from "@/lib/api";
 import { orderRef } from "@/lib/handover";
-import { dayTitle, rankTotals, timeLabel } from "@/lib/handoutLog";
+import { dayTitle, groupByDay, rankTotals, timeLabel } from "@/lib/handoutLog";
 import { useSession } from "@/store/session";
 
 type View_ = "handovers" | "receipts";
@@ -68,15 +68,21 @@ function AllHandovers({ role }: { role: RequestRole }) {
   const totals = rankTotals(feed.meta ?? []);
 
   return (
-    <FlatList
-      data={feed.items}
+    <SectionList
+      sections={groupByDay(feed.items)}
       keyExtractor={(item) => item.id}
       renderItem={({ item }) => <HandoutRow handout={item} showName />}
+      renderSectionHeader={({ section }) => (
+        <View className="bg-canvas px-4 pb-2 pt-4">
+          <Text className="text-body font-bold text-text-secondary">{section.title}</Text>
+        </View>
+      )}
+      stickySectionHeadersEnabled={false}
       refreshControl={
         <RefreshControl refreshing={feed.refreshing} onRefresh={() => void feed.refresh()} tintColor={colors.textPrimary} />
       }
       ListHeaderComponent={
-        <View className="gap-4 px-4 pb-4">
+        <View className="gap-4 px-4">
           {feed.error ? <InlineNotice tone="error" icon="circle-x" title="Not loaded" body={feed.error} /> : null}
           {totals.length ? (
             <View className="gg-card-flush" accessibilityLabel="Handovers per staff member">
@@ -92,9 +98,6 @@ function AllHandovers({ role }: { role: RequestRole }) {
                 </View>
               ))}
             </View>
-          ) : null}
-          {feed.items.length ? (
-            <Text className="pt-2 text-body font-bold text-text-secondary">Latest handovers</Text>
           ) : null}
         </View>
       }

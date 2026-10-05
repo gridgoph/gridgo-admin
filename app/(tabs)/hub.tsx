@@ -132,7 +132,7 @@ export default function HubScreen() {
                       {on ? <Check size={18} color={colors.accentOn} strokeWidth={3} /> : null}
                     </View>
                     <Text
-                      className={`min-w-0 flex-1 text-body-lg ${on ? "text-text-muted line-through" : "text-text-primary"}`}
+                      className={`min-w-0 flex-1 text-body-lg ${on ? "text-text-muted" : "text-text-primary"}`}
                     >
                       {item}
                     </Text>
