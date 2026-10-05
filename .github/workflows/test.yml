@@ -1,0 +1,48 @@
+name: Tests
+
+# Every pull request and every push to dev or main: the config resolves, the
+# types check, lint passes and the unit tests pass. No secret is referenced
+# here, so a pull request from anyone can run it safely.
+
+on:
+  pull_request:
+  push:
+    branches: [dev, main]
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Config, typecheck, lint and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Same as the other GRIDGO apps: jest's fake timers misbehave on 22.
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The only check that resolves every config plugin out of node_modules.
+      # Metro and jest never read expo.plugins.
+      - name: Resolve the public app config
+        run: npx expo config --type public > /dev/null
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test -- --ci --maxWorkers=2
