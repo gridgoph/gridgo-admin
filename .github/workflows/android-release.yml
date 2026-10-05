@@ -1,0 +1,351 @@
+name: Android release APK
+
+# Invited GRIDGO staff sideload this file, so every build that reaches them
+# must be a real signed release pointed at the deployed API — not a debug
+# artifact, and not one that quietly points at loopback. Mirrors gridgo-rider's
+# workflow; the Admin App has no push and no map, so there is no Firebase
+# config and no CARTO key.
+#
+# Pull requests run .github/workflows/test.yml instead. Until this
+# repository's signing, API/Clerk and deploy secrets exist, the apk job fails
+# at its first secret check; that is expected (README → Release).
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Also publish a GitHub Release for this build
+        type: boolean
+        default: false
+
+# A release build takes ~20 minutes; never run two for the same ref.
+concurrency:
+  group: android-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Config and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # The only check that resolves every config plugin out of node_modules.
+      # Metro never reads expo.plugins and neither does jest, which is how a
+      # stale plugin entry once shipped a launch crash past a green suite.
+      - name: Resolve the public app config
+        run: npx expo config --type public > /dev/null
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test -- --ci --maxWorkers=2
+
+  apk:
+    name: Signed release APK
+    # Kept even though pull_request is not a trigger: if one is ever added,
+    # a pull request still gets the checks above and nothing else.
+    if: github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # gh release create
+    env:
+      # Stamps the version staff read on the phone — see app.config.ts.
+      GRIDGO_BUILD_NUMBER: ${{ github.run_number }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space for the Android build
+        run: |
+          set -euo pipefail
+          df -h /
+          # GitHub-hosted images ship .NET, Haskell, CodeQL, extra NDKs and
+          # leftover Docker layers. An Expo release Gradle run fills the disk
+          # without this: 2026-08-28 client/supplier/rider all died mid-build
+          # with "No space left on device".
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/share/swift \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/share/powershell \
+            /usr/local/lib/android/sdk/ndk \
+            /usr/local/lib/android/sdk/ndk-bundle
+          sudo apt-get clean
+          docker image prune -af >/dev/null 2>&1 || true
+          df -h /
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          # Deliberately no gradle cache: the injected signing properties live
+          # in ~/.gradle, and a cache step would upload them out of the job.
+
+      - run: npm ci
+
+      - name: Resolve the public app config
+        id: config
+        env:
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          npx expo config --type public --json > "$RUNNER_TEMP/app.config.json"
+          version="$(node -p "require('$RUNNER_TEMP/app.config.json').version")"
+          code="$(node -p "require('$RUNNER_TEMP/app.config.json').android.versionCode")"
+          stem="gridgo-admin-$version-${GITHUB_SHA::7}"
+          {
+            echo "version=$version"
+            echo "stem=$stem"
+            echo "apk=$stem.apk"
+          } >> "$GITHUB_OUTPUT"
+          echo "GRIDGO Admin $version (versionCode $code)"
+
+      # Generated at build time rather than committed: .gitignore already keeps
+      # /android out of the repo, and a checked-in copy drifts silently from
+      # app.json on every Expo upgrade. The cost is that config correctness has
+      # to hold, which is what the step above enforces before the long build.
+      - name: Generate the android project
+        env:
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: npx expo prebuild --platform android --clean --no-install
+
+      # Expo regenerates android/gradle.properties from its template on every
+      # --clean prebuild, with org.gradle.jvmargs=-Xmx2048m. A release assemble
+      # of this app (Hermes, native debug metadata, ART profiles, lint-vital)
+      # now needs more than 2 GiB; ubuntu-latest has 16 GiB, so 6g is safe.
+      - name: Give the Gradle daemon enough heap
+        run: |
+          set -euo pipefail
+          props=android/gradle.properties
+          if ! grep -q '^org.gradle.jvmargs=' "$props"; then
+            echo "::error::$props has no org.gradle.jvmargs= line to replace"
+            exit 1
+          fi
+          sed -i 's|^org.gradle.jvmargs=.*|org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8|' "$props"
+          grep '^org.gradle.jvmargs=' "$props"
+
+      - name: Stage the release signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Outside the workspace, so nothing can commit it and no artifact
+          # upload of a repo path can sweep it up.
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          if [ ! -s "$RUNNER_TEMP/release.jks" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 did not decode to a keystore"
+            exit 1
+          fi
+          # AGP's injected signing config, in a properties file rather than on
+          # the gradle command line, which would put the password in the
+          # process list. Store and key password are the same key material.
+          mkdir -p "$HOME/.gradle"
+          {
+            printf 'android.injected.signing.store.file=%s\n' "$RUNNER_TEMP/release.jks"
+            printf 'android.injected.signing.store.password=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+            printf 'android.injected.signing.key.alias=%s\n' "$ANDROID_KEY_ALIAS"
+            printf 'android.injected.signing.key.password=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+          } > "$HOME/.gradle/gradle.properties"
+
+      - name: Build the release APK
+        working-directory: android
+        env:
+          # The load-bearing line of this whole workflow. EXPO_PUBLIC_* values
+          # are inlined by Babel while *this* command bundles the JS, not read
+          # at runtime. Set anywhere else — a later step, the runner env after
+          # the fact — and the app falls back to the loopback base in
+          # lib/api.ts or throws before Clerk can render: green in CI, dead on
+          # every real phone.
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_PUBLIC_API_URL:-}" ]; then
+            echo "::error::EXPO_PUBLIC_API_URL is not set for the build step"
+            exit 1
+          fi
+          case "${EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" in
+            pk_live_*) ;;
+            *) echo "::error::release builds require a Clerk pk_live_* publishable key"; exit 1 ;;
+          esac
+          ./gradlew assembleRelease --no-daemon
+
+      - name: Verify signature and baked-in public config
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: scripts/verify-release-apk.sh android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Name the build
+        id: apk
+        env:
+          VERSION: ${{ steps.config.outputs.version }}
+          APK: ${{ steps.config.outputs.apk }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          cp android/app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/out/$APK"
+          size="$(du -h "$RUNNER_TEMP/out/$APK" | cut -f1)"
+          echo "size=$size" >> "$GITHUB_OUTPUT"
+          {
+            echo "### GRIDGO Admin $VERSION"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`$APK\` |"
+            echo "| Size | $size |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Signature | release key, verified against the keystore alias |"
+            echo "| Public config | deployed API and Clerk values verified inside the bundle |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Only a merge to the default branch may replace the file staff download.
+      # Not a pull request, and not a manual dispatch from a branch — either
+      # would put unreviewed code on the download.
+      #
+      # The deploy key carries a forced command server-side; `upload-apk admin`
+      # arrives as SSH_ORIGINAL_COMMAND. The server validates the bytes are a
+      # real APK, stores it as gridgo-admin.apk and writes a sha256 sidecar.
+      # The server's forced command must know the `admin` name before this
+      # step can pass. The app stays invite-only either way: the APK is useless
+      # without a GRIDGO sign-in and a redeemed invite code.
+      #
+      # Runs before upload-artifact: Actions storage quota filling that step
+      # must not leave https://gridgo.talasora.com/download on a stale APK.
+      - name: Publish the APK to the captain's server
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          APK: ${{ steps.config.outputs.apk }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            [ -n "${!name:-}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            # Loud, not skipped: a silent no-op here leaves the landing site
+            # serving an older APK with nobody aware it went stale.
+            echo "::error::missing repository secret(s):$missing"
+            exit 1
+          fi
+
+          umask 077
+          key="$RUNNER_TEMP/deploy_key"
+          hosts="$RUNNER_TEMP/deploy_known_hosts"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$hosts"
+
+          apk="$RUNNER_TEMP/out/$APK"
+          # StrictHostKeyChecking against the pinned known_hosts: an unknown
+          # host is a failed upload, never a prompt or a blind trust.
+          response="$(ssh -i "$key" \
+            -o IdentitiesOnly=yes \
+            -o UserKnownHostsFile="$hosts" \
+            -o StrictHostKeyChecking=yes \
+            -o BatchMode=yes \
+            -o ConnectTimeout=30 \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'upload-apk admin' < "$apk")"
+          printf '%s\n' "$response"
+
+          # If the server echoes the digest it stored, it has to be the file we
+          # built — a truncated upload that still exits 0 would otherwise serve
+          # a broken APK to everyone who downloads it.
+          local_sha="$(sha256sum "$apk" | cut -d' ' -f1)"
+          echo "built sha256: $local_sha"
+          remote_sha="$(printf '%s' "$response" | grep -oiE '[0-9a-f]{64}' | head -1 || true)"
+          if [ -n "$remote_sha" ] && [ "$(printf '%s' "$remote_sha" | tr 'A-F' 'a-f')" != "$local_sha" ]; then
+            echo "::error::the server stored a different file than this build produced"
+            exit 1
+          fi
+
+          echo "| Published | \`gridgo-admin.apk\` on the captain's server |" >> "$GITHUB_STEP_SUMMARY"
+
+      # Only the default branch names a release. A build from anywhere else is
+      # downloadable as a run artifact and nothing more. This step uses the
+      # on-disk APK, so it must run before upload-artifact: a full Actions
+      # storage quota fails that step and would otherwise skip the Release.
+      #
+      # After the landing upload, never before it: the in-app update prompt
+      # reads GitHub's latest release but "Update now" downloads from the
+      # landing site, so a release published first (or one whose upload then
+      # failed) offers build N to phones while serving N-1 — they reinstall
+      # the same build and are offered it again. Only a push to main uploads,
+      # so only that run may mark its release latest; a manual dispatch with
+      # publish_release still gets a release, but no phone is offered it.
+      - name: Publish the GitHub Release
+        if: github.ref == 'refs/heads/main' || github.event.inputs.publish_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.config.outputs.version }}
+          APK: ${{ steps.config.outputs.apk }}
+          SIZE: ${{ steps.apk.outputs.size }}
+          LATEST: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: |
+          set -euo pipefail
+          notes="$(printf '%s\n' \
+            "Signed release APK for sideloading ($SIZE). Install it on the phone directly." \
+            "" \
+            "Commit \`${GITHUB_SHA::7}\`, build $GITHUB_RUN_NUMBER." \
+            "Verified in CI: signed with the release key, and deployed API and Clerk values are inlined in the JS bundle.")"
+          gh release create "v$VERSION" "$RUNNER_TEMP/out/$APK" \
+            --target "$GITHUB_SHA" \
+            --title "GRIDGO Admin $VERSION" \
+            --notes "$notes" \
+            --latest="$LATEST"
+
+      # Best-effort CI convenience. Quota-full here used to skip the two
+      # publish steps above and leave the landing site stale. continue-on-error
+      # keeps a green job when the APK already reached staff.
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ steps.config.outputs.stem }}
+          path: ${{ runner.temp }}/out/*.apk
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Remove the signing key and deploy credentials
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/release.jks" \
+                "$HOME/.gradle/gradle.properties" \
+                "$RUNNER_TEMP/deploy_key" \
+                "$RUNNER_TEMP/deploy_known_hosts"

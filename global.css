@@ -1,0 +1,371 @@
+/* ============================================================================
+   GRIDGO design system — CSS layer
+
+   The token tables in AGENTS.md are the source of truth. This file registers
+   them with Tailwind so every screen consumes them by semantic name.
+   `constants/theme.ts` mirrors the same values for JavaScript consumers
+   (navigation theme, status bar, map styles).
+
+   Theming: the @theme block below holds the Light values; the dark block near
+   the bottom of this file overrides the same variables under
+   `prefers-color-scheme: dark`. One class — `bg-canvas` — is therefore correct
+   in both themes and no screen needs a `dark:` variant for a token colour.
+
+   The default Tailwind colour, type and radius scales are reset on purpose.
+   `bg-blue-500`, `text-base` and `rounded-md` no longer exist; only GRIDGO
+   tokens do. That is what keeps hard-coded values out of screens.
+   ============================================================================ */
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+@import "nativewind/theme";
+
+@theme static {
+  /* -- Colour (Light) -----------------------------------------------------
+     Dark values live in the `prefers-color-scheme: dark` block at the end of
+     this file. Add a token in both places or it will not switch themes. */
+
+  --color-*: initial;
+
+  --color-transparent: transparent;
+  --color-white: #ffffff;
+  --color-black: #000000;
+
+  /* Surfaces */
+  --color-canvas: #f8f8f8;
+  --color-surface: #ffffff;
+  --color-surface-variant: #f0f0f0;
+  --color-surface-high: #ffffff;
+
+  /* Text */
+  --color-text-primary: #1a1a1a;
+  --color-text-secondary: #4a4a4a;
+  --color-text-muted: #7a7a7a;
+
+  /* Lines */
+  --color-outline: #dcdcdc;
+  --color-outline-subtle: #eeeeee;
+
+  /* Monochrome structural control */
+  --color-accent: #1a1a1a;
+  --color-accent-on: #ffffff;
+
+  /* Brand — small links and badges only, never a fill */
+  --color-brand: #d4a017;
+  --color-brand-logo: #ffde58;
+
+  /* Action — see "the yellow rule". Identical in both themes, always black
+     text on top, one primary CTA per screen or bounded panel. */
+  --color-action-yellow: #ffde58;
+  --color-action-yellow-on: #1a1a1a;
+  --color-action-yellow-on-muted: #5b5b5b;
+
+  /* Earnings — the rider's own money. Light marks dark digits with a yellow
+     band (yellow text fails contrast on white); Dark sets the digits in
+     yellow and drops the band. Rendered only by components/EarningAmount. */
+  --color-earning-ink: #1a1a1a;
+  --color-earning-mark: #ffde58;
+
+  /* Semantic state — always paired with an icon and a label */
+  --color-success: #2e7d32;
+  --color-error: #c62828;
+  --color-warning: #f57f17;
+  --color-info: #1565c0;
+
+  /* Interaction overlays: hover 4%, pressed 8% */
+  --color-overlay-hover: rgb(0 0 0 / 0.04);
+  --color-overlay-pressed: rgb(0 0 0 / 0.08);
+
+  /* Scrim behind sheets and modals */
+  --color-scrim: rgb(0 0 0 / 0.4);
+
+  /* -- Type ---------------------------------------------------------------
+     Satoshi carries all UI type. It ships as one file per cut, and React
+     Native resolves a font by family name alone — `font-weight: 700` will
+     never reach Satoshi-Bold. So the `font-*` classes name a family rather
+     than a weight, and the built-in weight scale is removed so there is only
+     one way to ask for bold.
+
+     Registration lives in constants/fonts.ts. Both files must agree. */
+
+  --font-weight-*: initial;
+
+  --font-sans: Satoshi-Regular;
+  --font-normal: Satoshi-Regular;
+  --font-medium: Satoshi-Medium;
+  --font-bold: Satoshi-Bold;
+  --font-black: Satoshi-Black;
+
+  /* Brand display. Poppins ExtraBold per the type spec; Satoshi-Black stands
+     in until Poppins is licensed. Instrument Serif has no stand-in — rare
+     decorative text waits for the real file rather than borrowing a face. */
+  --font-brand: Satoshi-Black;
+
+  /* The scale itself is defined as utilities further down, because each step
+     carries its cut as well as its size. Values are mirrored in
+     constants/theme.ts for JavaScript consumers. */
+  --text-*: initial;
+
+  /* -- Space --------------------------------------------------------------
+     4px base. `p-4` is the 16px page padding; `gap-2/3/4/6/8` are the
+     standard 8 / 12 / 16 / 24 / 32 gaps. */
+
+  --spacing: 4px;
+
+  /* -- Radius -------------------------------------------------------------
+     Fields 12, cards 12–16, pills 999. Do not mix arbitrary values. */
+
+  --radius-*: initial;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+
+  --radius-field: 12px;
+  --radius-card: 16px;
+  --radius-pill: 9999px;
+
+  /* -- Elevation ----------------------------------------------------------
+     Border first. Reach for a shadow only when a border cannot carry the
+     separation — a sheet floating over content, for example. */
+
+  --shadow-*: initial;
+
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.04);
+  --shadow-sheet: 0 8px 24px rgb(0 0 0 / 0.12);
+
+  /* -- Motion -------------------------------------------------------------
+     160–240ms ease-out. Use `duration-160`, `duration-200`, `duration-240`.
+     No essential state may be communicated by animation alone. */
+
+  --default-transition-duration: 200ms;
+  --default-transition-timing-function: var(--ease-out);
+}
+
+/* ----------------------------------------------------------------------------
+   Colour (Dark)
+
+   Same product, different presentation. Cards must stay visibly elevated from
+   the canvas — never let a surface disappear into black.
+
+   Note: `light-dark()` cannot be used here. react-native-css resolves it in
+   ordinary declarations but drops the dark half inside a custom property, so
+   the override has to be an explicit media block.
+   ---------------------------------------------------------------------------- */
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #000000;
+    --color-surface: #141414;
+    --color-surface-variant: #1e1e1e;
+    --color-surface-high: #2a2a2a;
+
+    --color-text-primary: #f0f0f0;
+    --color-text-secondary: #cccccc;
+    --color-text-muted: #808080;
+
+    --color-outline: #2e2e2e;
+    --color-outline-subtle: #1e1e1e;
+
+    --color-accent: #f0f0f0;
+    --color-accent-on: #000000;
+
+    --color-brand: #ffde58;
+
+    --color-earning-ink: #ffde58;
+    --color-earning-mark: transparent;
+
+    --color-success: #66bb6a;
+    --color-error: #ef5350;
+    --color-warning: #ffca28;
+    --color-info: #42a5f5;
+
+    --color-overlay-hover: rgb(255 255 255 / 0.04);
+    --color-overlay-pressed: rgb(255 255 255 / 0.08);
+
+    --color-scrim: rgb(0 0 0 / 0.6);
+  }
+}
+
+/* ----------------------------------------------------------------------------
+   Type scale
+
+   One class per step: size, leading and the Satoshi cut the step is set in.
+   Colour stays separate, so a heading reads `text-h2 text-text-primary`.
+
+   To change the cut on a step, add `font-normal`, `font-medium`, `font-bold`
+   or `font-black` — those classes are ordered after these and win.
+
+   Nothing essential goes below 12px.
+   ---------------------------------------------------------------------------- */
+
+/** 32/38. Large numbers and hero moments. Add `font-brand` for brand display. */
+@utility text-display {
+  font-family: var(--font-bold);
+  font-size: 32px;
+  line-height: 38px;
+}
+
+@utility text-h1 {
+  font-family: var(--font-bold);
+  font-size: 28px;
+  line-height: 34px;
+}
+
+@utility text-h2 {
+  font-family: var(--font-bold);
+  font-size: 24px;
+  line-height: 30px;
+}
+
+@utility text-h3 {
+  font-family: var(--font-bold);
+  font-size: 20px;
+  line-height: 26px;
+}
+
+@utility text-body-lg {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 24px;
+}
+
+@utility text-body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+@utility text-caption {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/**
+ * 10/16. Tab bar labels, and nothing else.
+ *
+ * The only step under the 12px floor, and it matches what iOS sets its own tab
+ * labels at. It is allowed here because a nav label never carries information
+ * on its own — it sits under its icon, in a fixed row, naming a place the user
+ * can also see. Keeping the 16px line box means it still lands on the 4px
+ * grid. Do not reach for this anywhere else.
+ */
+@utility text-nav {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+/** Button labels. Always a clear verb. */
+@utility text-button {
+  font-family: var(--font-bold);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+/** Section eyebrow. Uppercase it in the copy, not with a transform. */
+@utility text-overline {
+  font-family: var(--font-medium);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 1.5px;
+}
+
+/* ----------------------------------------------------------------------------
+   Reusable class patterns
+
+   Structural patterns every screen needs. Anything richer belongs in
+   components/, not here.
+   ---------------------------------------------------------------------------- */
+
+/* Screen shell -------------------------------------------------------------- */
+
+/** Full-bleed screen background. */
+@utility gg-screen {
+  @apply flex-1 bg-canvas;
+}
+
+/** 16px page padding. */
+@utility gg-page {
+  @apply px-4;
+}
+
+/* Containers ---------------------------------------------------------------- */
+
+/** Standard card: surface, hairline border, 16px radius, 16px padding. */
+@utility gg-card {
+  @apply rounded-card border border-outline bg-surface p-4;
+}
+
+/** Card that owns its own padding — lists, media headers, map cards. */
+@utility gg-card-flush {
+  @apply overflow-hidden rounded-card border border-outline bg-surface;
+}
+
+/** Inactive or grouping panel. */
+@utility gg-panel {
+  @apply rounded-card bg-surface-variant p-4;
+}
+
+/** Selected or elevated panel. Stays lifted off the canvas in Dark. */
+@utility gg-panel-high {
+  @apply rounded-card border border-outline bg-surface-high p-4;
+}
+
+/** 1px divider. */
+@utility gg-divider {
+  @apply h-px w-full bg-outline-subtle;
+}
+
+/* Controls ------------------------------------------------------------------ */
+
+/** Minimum 44 x 44 touch target. Every tappable control gets this. */
+@utility gg-touch {
+  @apply min-h-11 min-w-11;
+}
+
+/** Text field / select shell. */
+@utility gg-field {
+  @apply h-12 rounded-field border border-outline bg-surface text-body text-text-primary;
+}
+
+/** Shared button box. Compose with a fill below. */
+@utility gg-btn {
+  @apply h-11 min-w-11 flex-row items-center justify-center gap-2 rounded-field px-4;
+}
+
+/** The one primary CTA on a screen or bounded panel. No other button is yellow. */
+@utility gg-btn-primary {
+  @apply gg-btn bg-action-yellow;
+}
+
+/** Neutral outlined button. Every non-primary action uses this. */
+@utility gg-btn-secondary {
+  @apply gg-btn border border-outline bg-surface;
+}
+
+/** Status / filter pill. Pair with an icon and a label — never colour alone. */
+@utility gg-chip {
+  @apply flex-row items-center gap-1.5 rounded-pill border border-outline px-3 py-1;
+}
+
+/* States -------------------------------------------------------------------- */
+
+/** Disabled: 38% emphasis, label stays readable. */
+@utility gg-disabled {
+  @apply opacity-[0.38];
+}
+
+/** Pressed overlay, for the inner layer of a Pressable. */
+@utility gg-pressed {
+  @apply bg-overlay-pressed;
+}
+
+/** 2px visible focus outline with 2px offset. Never remove focus indication. */
+@utility gg-focus-ring {
+  @apply outline-2 outline-offset-2 outline-accent;
+}
