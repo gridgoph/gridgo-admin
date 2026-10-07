@@ -1,9 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react-native";
+import { act, fireEvent, render, screen } from "@testing-library/react-native";
 
 import EscalateScreen from "@/app/escalate";
 import ScanScreen from "@/app/(tabs)/scan";
 import { setTokenProvider } from "@/lib/api";
 import { useScan } from "@/store/scan";
+import { useSession } from "@/store/session";
 
 const mockRouter = { push: jest.fn(), back: jest.fn(), navigate: jest.fn() };
 jest.mock("expo-router", () => ({
@@ -33,6 +34,7 @@ const body = (index: number) => JSON.parse(String(calls[index].init.body));
 
 beforeEach(() => {
   useScan.getState().reset();
+  useSession.getState().reset();
   setTokenProvider(async () => "jwt");
   jest.clearAllMocks();
 });
@@ -82,6 +84,29 @@ describe("scan and confirm", () => {
     expect(screen.getByTestId("result-done")).toBeTruthy();
     expect(screen.getByText("Codes match")).toBeTruthy();
     expect(screen.getByText("1A2B-3C4D")).toBeTruthy();
+  });
+});
+
+describe("Operations at the counter", () => {
+  it("claims and escalates with the account's own admin membership, never staff", async () => {
+    useSession.getState().setAccess({
+      kind: "granted",
+      name: "Ops Person",
+      staff: { id: "u", name: "Ops Person", role: "ops_admin", canHandout: true },
+      staffRole: "ops_admin",
+      adminRole: "ops_admin",
+    });
+    stubFetch(
+      { status: 409, body: { error: "handover_otp_mismatch", escalatePath: "/orders/ord_1a2b3c4d/handover/escalate" } },
+      { status: 200, body: { escalated: true } },
+    );
+    await scanAndType("654321");
+    await fireEvent.press(screen.getByText("Confirm handover"));
+    await act(() => useScan.getState().escalate("Client showed a different code."));
+    expect(calls.map((call) => (call.init.headers as Record<string, string>)["X-GRIDGO-Role"])).toEqual([
+      "ops_admin",
+      "ops_admin",
+    ]);
   });
 });
 

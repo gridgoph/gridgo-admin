@@ -8,7 +8,7 @@ import { Screen } from "@/components/Screen";
 import { SecondaryButton } from "@/components/SecondaryButton";
 import { useThemeColors } from "@/hooks/useTheme";
 import { usePagedFeed } from "@/hooks/usePagedFeed";
-import { roleLabel } from "@/lib/access";
+import { roleLabel, staffRequestRole } from "@/lib/access";
 import { listMyHandouts, type Handout, type StaffTotal } from "@/lib/api";
 import { countToday, groupByDay, ownTotal } from "@/lib/handoutLog";
 import { useSession } from "@/store/session";
@@ -22,8 +22,9 @@ export default function HandoversScreen() {
   const router = useRouter();
   const access = useSession((state) => state.access);
   const staff = access?.kind === "granted" ? access.staff : null;
+  const role = staffRequestRole(access);
   const feed = usePagedFeed<Handout, StaffTotal[]>(async (before) => {
-    const page = await listMyHandouts(before);
+    const page = await listMyHandouts(role, before);
     return { items: page.handouts, meta: page.staffTotals, nextCursor: page.nextCursor };
   }, Boolean(staff));
 

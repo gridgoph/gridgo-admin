@@ -9,8 +9,9 @@ import { Platform } from "react-native";
  * with a newly minted token before anything treats the session as dead.
  *
  * The contract is gridgo-api `docs/HUB_HANDOVER_API.md`. Staff routes select
- * the staff projection with `X-GRIDGO-Role: staff`; the Admin feeds select the
- * caller's Operations or Super Admin membership. A role header the account
+ * the staff projection with `X-GRIDGO-Role: staff` (Operations and Super Admin
+ * select it with their own membership); the Admin feeds select the caller's
+ * Operations or Super Admin membership. A role header the account
  * does not hold is a 403, so the header always follows `lib/access.ts`.
  */
 
@@ -299,9 +300,12 @@ export function getMe(): Promise<Me> {
   return request<Me>("/auth/me", { ignoreUnauthorized: true });
 }
 
-/** The caller's staff profile. 403 when the profile is suspended or missing. */
-export async function getStaffMe(): Promise<StaffProfile> {
-  const result = await request<{ staff: StaffProfile }>("/staff/me", { role: "staff" });
+/**
+ * The caller's staff profile, selected with `staff` or, for Operations and
+ * Super Admin, their own membership. 403 when suspended or missing.
+ */
+export async function getStaffMe(role: RequestRole = "staff"): Promise<StaffProfile> {
+  const result = await request<{ staff: StaffProfile }>("/staff/me", { role });
   return result.staff;
 }
 
@@ -322,10 +326,10 @@ export function getHub(role: RequestRole): Promise<{ hub: Hub; sop: string[] }> 
 }
 
 /** Both the scanned QR and the client's code; the API confirms the pair. */
-export function claimHandover(qrToken: string, otp: string): Promise<ClaimResult> {
+export function claimHandover(role: RequestRole, qrToken: string, otp: string): Promise<ClaimResult> {
   return request<ClaimResult>("/staff/hub/claims", {
     method: "POST",
-    role: "staff",
+    role,
     body: { qrToken, otp },
   });
 }
@@ -335,13 +339,14 @@ export function claimHandover(qrToken: string, otp: string): Promise<ClaimResult
  * the API can tie the report to the package actually on the counter.
  */
 export function escalateHandover(
+  role: RequestRole,
   escalatePath: string,
   reason: string,
   qrToken: string,
 ): Promise<{ escalated: true }> {
   return request(escalatePath, {
     method: "POST",
-    role: "staff",
+    role,
     body: { reason: reason.trim(), qrToken },
   });
 }
@@ -350,8 +355,8 @@ function pageQuery(before?: string | null): string {
   return before ? `?before=${encodeURIComponent(before)}` : "";
 }
 
-export function listMyHandouts(before?: string | null): Promise<HandoutPage> {
-  return request(`/staff/hub/handouts${pageQuery(before)}`, { role: "staff" });
+export function listMyHandouts(role: RequestRole, before?: string | null): Promise<HandoutPage> {
+  return request(`/staff/hub/handouts${pageQuery(before)}`, { role });
 }
 
 export function listAllHandouts(role: RequestRole, before?: string | null): Promise<HandoutPage> {

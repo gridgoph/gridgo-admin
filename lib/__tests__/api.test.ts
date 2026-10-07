@@ -3,7 +3,9 @@ import {
   apiErrorMessage,
   claimHandover,
   getMe,
+  getStaffMe,
   listAllHandouts,
+  listMyHandouts,
   redeemInvite,
   resolveApiBase,
   setTokenProvider,
@@ -40,11 +42,25 @@ describe("requests", () => {
   it("selects the staff projection and sends both halves of a claim", async () => {
     setTokenProvider(async () => "jwt-1");
     const calls = stubFetch({ status: 200, body: { handout: { id: "h" }, order: { orderId: "ord_1" } } });
-    await claimHandover("qr-token", "123456");
+    await claimHandover("staff", "qr-token", "123456");
     expect(calls[0].url).toMatch(/\/staff\/hub\/claims$/);
     expect(headers(calls[0])["X-GRIDGO-Role"]).toBe("staff");
     expect(headers(calls[0]).Authorization).toBe("Bearer jwt-1");
     expect(JSON.parse(String(calls[0].init.body))).toEqual({ qrToken: "qr-token", otp: "123456" });
+  });
+
+  it("selects the staff routes with an admin membership for Operations and Super Admin", async () => {
+    setTokenProvider(async () => "jwt-1");
+    const calls = stubFetch(
+      { status: 200, body: { staff: { id: "u", name: "Ops", role: "ops_admin", canHandout: true } } },
+      { status: 200, body: { handouts: [], staffTotals: [], nextCursor: null } },
+    );
+    await getStaffMe("ops_admin");
+    await listMyHandouts("super_admin");
+    expect(calls[0].url).toMatch(/\/staff\/me$/);
+    expect(headers(calls[0])["X-GRIDGO-Role"]).toBe("ops_admin");
+    expect(calls[1].url).toMatch(/\/staff\/hub\/handouts$/);
+    expect(headers(calls[1])["X-GRIDGO-Role"]).toBe("super_admin");
   });
 
   it("reads the Admin feeds with the admin membership, never staff", async () => {
