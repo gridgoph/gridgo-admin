@@ -14,6 +14,9 @@ import { hubDayKey, hubDaysLabel, hubToday } from "@/lib/hubSchedule";
 import { useSession } from "@/store/session";
 import { useSop } from "@/store/sop";
 
+/** The pilot hub’s zone (UTC+08:00), used for the checklist day until hours are set. */
+const PILOT_UTC_OFFSET_MINUTES = 480;
+
 /**
  * Hub duty: today's hours and the standard operating procedure as a
  * checklist. The steps are GRIDGO's (`GET /staff/hub`), never this app's copy.
@@ -37,7 +40,7 @@ export default function HubScreen() {
       if (pulled) setRefreshing(true);
       try {
         const result = await getHub(role);
-        await useSop.getState().hydrate(hubDayKey(new Date(), result.hub.schedule.utcOffsetMinutes));
+        await useSop.getState().hydrate(hubDayKey(new Date(), result.hub.schedule?.utcOffsetMinutes ?? PILOT_UTC_OFFSET_MINUTES));
         setHub(result.hub);
         setSop(result.sop);
         setError(null);
@@ -57,7 +60,7 @@ export default function HubScreen() {
     }, [read]),
   );
 
-  const today = hub ? hubToday(hub.schedule) : null;
+  const today = hub?.schedule ? hubToday(hub.schedule) : null;
   const done = sop.filter((item) => checked.includes(item)).length;
   const allDone = sop.length > 0 && done === sop.length;
 
@@ -98,10 +101,19 @@ export default function HubScreen() {
                   : "Not a hub day"}
             </Text>
             <Text className="text-body text-text-secondary">
-              Hub days: {hubDaysLabel(hub.schedule) || "none set"}
+              Hub days: {(hub.schedule && hubDaysLabel(hub.schedule)) || "none set"}
               {hub.point?.label ? `. ${hub.point.label}.` : "."}
             </Text>
           </View>
+        ) : null}
+
+        {hub && !hub.schedule ? (
+          <InlineNotice
+            tone="warning"
+            icon="clock"
+            title="Hub hours not set"
+            body="GRIDGO has not set this hub’s opening hours yet. Ask Operations before you open the counter."
+          />
         ) : null}
 
         {sop.length ? (

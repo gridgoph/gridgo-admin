@@ -14,7 +14,10 @@ export function HandoutRow({ handout, showName = false }: { handout: Handout; sh
       className="min-h-14 flex-row items-center gap-4 border-b border-outline-subtle bg-surface px-4 py-3"
       accessibilityLabel={`${timeLabel(handout.at)}, order ${orderRef(handout.orderId)}${showName ? `, by ${handout.staffName}` : ""}`}
     >
-      <Text className="w-20 text-body-lg font-bold text-text-primary">{timeLabel(handout.at)}</Text>
+      {/* Wide enough for "12:47 PM" on Android; at a larger font size it grows rather than wrapping "AM" under the time. */}
+      <Text className="min-w-24 shrink-0 text-body-lg font-bold text-text-primary" numberOfLines={1}>
+        {timeLabel(handout.at)}
+      </Text>
       <View className="min-w-0 flex-1 gap-0.5">
         <Text className="text-body text-text-primary" numberOfLines={1}>
           Order {orderRef(handout.orderId)}
