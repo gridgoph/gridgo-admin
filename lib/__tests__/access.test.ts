@@ -5,11 +5,13 @@ import {
   loadAccess,
   normalizeInviteCode,
   roleLabel,
+  staffRequestRole,
   type Access,
 } from "@/lib/access";
-import { ApiError, type Me, type StaffProfile } from "@/lib/api";
+import { ApiError, type Me, type RequestRole, type StaffProfile } from "@/lib/api";
 
 const hubStaff: StaffProfile = { id: "user_1", name: "Hub Person", role: "hub_staff", canHandout: true };
+const opsStaff: StaffProfile = { id: "user_1", name: "Ops Person", role: "ops_admin", canHandout: true };
 
 function me(roles: Me["memberships"][number]["role"][], name = "Signed In"): Me {
   return { user: { id: "user_1", name }, memberships: roles.map((role) => ({ role })) };
@@ -21,7 +23,7 @@ function deps(memberships: Me | Error, staff: StaffProfile | Error = hubStaff) {
       if (memberships instanceof Error) throw memberships;
       return memberships;
     }),
-    getStaffMe: jest.fn(async () => {
+    getStaffMe: jest.fn(async (_role: RequestRole) => {
       if (staff instanceof Error) throw staff;
       return staff;
     }),
@@ -43,7 +45,7 @@ describe("loadAccess", () => {
 
   it("reads the staff profile for a staff membership", async () => {
     const access = await loadAccess(deps(me(["client", "staff"])));
-    expect(access).toEqual({ kind: "granted", name: "Hub Person", staff: hubStaff, adminRole: null });
+    expect(access).toEqual({ kind: "granted", name: "Hub Person", staff: hubStaff, staffRole: "staff", adminRole: null });
   });
 
   it("treats a suspended staff profile as paused, not as an error", async () => {
@@ -57,21 +59,53 @@ describe("loadAccess", () => {
       kind: "granted",
       name: "Ops Person",
       staff: null,
+      staffRole: null,
       adminRole: "ops_admin",
     });
   });
 
-  it("grants the Admin view to Operations without a staff profile", async () => {
-    const d = deps(me(["ops_admin"]));
-    const access = await loadAccess(d);
-    expect(access).toMatchObject({ kind: "granted", staff: null, adminRole: "ops_admin" });
-    expect(d.getStaffMe).not.toHaveBeenCalled();
+  it("makes Operations and Super Admin staff through their own membership, without an invite", async () => {
+    for (const role of ["ops_admin", "super_admin"] as const) {
+      const profile = { ...opsStaff, role };
+      const d = deps(me([role]), profile);
+      await expect(loadAccess(d)).resolves.toEqual({
+        kind: "granted",
+        name: "Ops Person",
+        staff: profile,
+        staffRole: role,
+        adminRole: role,
+      });
+      expect(d.getStaffMe).toHaveBeenCalledTimes(1);
+      expect(d.getStaffMe).toHaveBeenCalledWith(role);
+    }
+  });
+
+  it("falls back to the admin membership when the invited staff profile is paused", async () => {
+    const d = deps(me(["staff", "super_admin"]));
+    d.getStaffMe.mockImplementation(async (role) => {
+      if (role === "staff") throw new ApiError(403, { error: "staff_membership_required" });
+      return { ...opsStaff, role };
+    });
+    await expect(loadAccess(d)).resolves.toMatchObject({ kind: "granted", staffRole: "super_admin", adminRole: "super_admin" });
+    expect(d.getStaffMe.mock.calls).toEqual([["staff"], ["super_admin"]]);
+  });
+
+  it("keeps the Admin view when the API does not grant admins the staff routes", async () => {
+    const d = deps(me(["ops_admin"], "Ops Person"), new ApiError(403, { error: "staff_membership_required" }));
+    await expect(loadAccess(d)).resolves.toEqual({
+      kind: "granted",
+      name: "Ops Person",
+      staff: null,
+      staffRole: null,
+      adminRole: "ops_admin",
+    });
   });
 
   it("rethrows a failure that says nothing about the account", async () => {
     await expect(loadAccess(deps(new Error("offline")))).rejects.toThrow("offline");
     await expect(loadAccess(deps(new ApiError(503, { error: "server_error" })))).rejects.toBeInstanceOf(ApiError);
     await expect(loadAccess(deps(me(["staff"]), new ApiError(500, {})))).rejects.toBeInstanceOf(ApiError);
+    await expect(loadAccess(deps(me(["ops_admin"]), new Error("offline")))).rejects.toThrow("offline");
   });
 });
 
@@ -80,6 +114,7 @@ describe("roles → tabs", () => {
     kind: "granted",
     name: "x",
     staff,
+    staffRole: staff ? (staff.role === adminRole ? adminRole : "staff") : null,
     adminRole,
   });
 
@@ -98,14 +133,25 @@ describe("roles → tabs", () => {
     expect(accessTabs(granted(greeter, null))).toEqual({ scan: false, handovers: true, hub: true, admin: false });
   });
 
-  it("gives Operations the Admin view and the SOP, never Scan", () => {
+  it("gives Operations every tab once the API grants it the staff routes", () => {
+    expect(accessTabs(granted(opsStaff, "ops_admin"))).toEqual({ scan: true, handovers: true, hub: true, admin: true });
+  });
+
+  it("gives Operations the Admin view and the SOP without the staff routes, never Scan", () => {
     expect(accessTabs(granted(null, "ops_admin"))).toEqual({ scan: false, handovers: false, hub: true, admin: true });
   });
 
   it("reads the hub as staff first, else with the admin membership", () => {
     expect(hubReadRole(granted(hubStaff, "super_admin"))).toBe("staff");
+    expect(hubReadRole(granted({ ...opsStaff, role: "super_admin" }, "super_admin"))).toBe("super_admin");
     expect(hubReadRole(granted(null, "super_admin"))).toBe("super_admin");
     expect(hubReadRole({ kind: "none" })).toBeNull();
+  });
+
+  it("selects the staff routes with staff, or with the admin membership that grants them", () => {
+    expect(staffRequestRole(granted(hubStaff, "ops_admin"))).toBe("staff");
+    expect(staffRequestRole(granted(opsStaff, "ops_admin"))).toBe("ops_admin");
+    expect(staffRequestRole(null)).toBe("staff");
   });
 
   it("prefers Super Admin over Operations", () => {
@@ -115,6 +161,8 @@ describe("roles → tabs", () => {
 
   it("labels configurable role codes in plain words", () => {
     expect(roleLabel("hub_staff")).toBe("Hub staff");
+    expect(roleLabel("ops_admin")).toBe("Operations");
+    expect(roleLabel("super_admin")).toBe("Super Admin");
     expect(roleLabel("")).toBe("Staff");
   });
 });

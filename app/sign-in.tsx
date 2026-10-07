@@ -1,7 +1,7 @@
 import { useAuth, useClerk, useSignIn } from "@clerk/expo";
 import { useSSO } from "@clerk/expo/experimental";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, Text, TextInput, View } from "react-native";
+import { Image, Pressable, Text, TextInput, View } from "react-native";
 
 import { AuthDivider } from "@/components/AuthDivider";
 import { CodeField } from "@/components/CodeField";
@@ -24,6 +24,12 @@ import {
 import { completeGoogleSso } from "@/lib/googleSso";
 
 const CODE_LENGTH = 6;
+/**
+ * Fills the space between the intro and the form: it grows on a tall phone up
+ * to its cap and shrinks on a small one. With the keyboard open the form
+ * scrolls over it rather than squeezing it.
+ */
+const ILLUSTRATION = { flex: 1, width: "100%", maxHeight: 300 } as const;
 const RESEND_COOLDOWN_SECONDS = 30;
 
 /**
@@ -264,6 +270,16 @@ export default function SignInScreen() {
               Use your GRIDGO account. New staff sign in first, then enter the invite code GRIDGO sent.
             </Text>
           </View>
+        </View>
+
+        <View className="min-h-32 flex-1 items-center justify-center">
+          <Image
+            source={require("@/assets/images/sign-in-illustration.webp")}
+            style={ILLUSTRATION}
+            resizeMode="contain"
+            accessibilityIgnoresInvertColors
+            testID="sign-in-illustration"
+          />
         </View>
 
         <View className="gap-4">

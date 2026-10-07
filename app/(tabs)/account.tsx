@@ -40,14 +40,19 @@ export default function AccountScreen() {
             ) : null}
           </View>
           <View className="gap-2 border-t border-outline-subtle pt-4">
-            {granted?.staff ? (
+            {granted?.staff && granted.staffRole === "staff" ? (
               <Row
                 label="Staff role"
                 value={`${roleLabel(granted.staff.role)}${granted.staff.canHandout ? ", can hand out orders" : ""}`}
               />
             ) : null}
             {granted?.adminRole ? (
-              <Row label="Admin access" value={granted.adminRole === "super_admin" ? "Super Admin" : "Operations"} />
+              <Row
+                label="Admin access"
+                value={`${roleLabel(granted.adminRole)}${
+                  granted.staffRole === granted.adminRole && granted.staff?.canHandout ? ", can hand out orders" : ""
+                }`}
+              />
             ) : null}
           </View>
         </View>
