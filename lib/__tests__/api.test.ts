@@ -94,6 +94,22 @@ describe("requests", () => {
     expect(signedOut).not.toHaveBeenCalled();
   });
 
+  it("retries a stale token on the identity probe without signing out", async () => {
+    const provider = jest.fn(async (options?: { skipCache?: boolean }) =>
+      options?.skipCache ? "fresh" : "stale",
+    );
+    setTokenProvider(provider);
+    const signedOut = jest.fn();
+    setUnauthorizedHandler(signedOut);
+    const calls = stubFetch(
+      { status: 401, body: { error: "unauthorized" } },
+      { status: 200, body: { user: { id: "user_1" }, memberships: [] } },
+    );
+    await getMe();
+    expect(calls.map((call) => headers(call).Authorization)).toEqual(["Bearer stale", "Bearer fresh"]);
+    expect(signedOut).not.toHaveBeenCalled();
+  });
+
   it("signs out only when the fresh token is refused too", async () => {
     setTokenProvider(async () => "jwt");
     const signedOut = jest.fn();
@@ -111,6 +127,29 @@ describe("requests", () => {
     await expect(getMe()).rejects.toBeInstanceOf(ApiError);
     expect(calls).toHaveLength(1);
     expect(signedOut).not.toHaveBeenCalled();
+  });
+
+  it("never signs out on the identity probe, even when the fresh token is refused", async () => {
+    setTokenProvider(async () => "jwt");
+    const signedOut = jest.fn();
+    setUnauthorizedHandler(signedOut);
+    const calls = stubFetch({ status: 401, body: { error: "unauthorized" } }, { status: 401, body: { error: "unauthorized" } });
+    await expect(getMe()).rejects.toBeInstanceOf(ApiError);
+    expect(calls).toHaveLength(2);
+    expect(signedOut).not.toHaveBeenCalled();
+  });
+
+  it("explains an unreachable server in staff words, not the platform's", async () => {
+    setTokenProvider(async () => "jwt");
+    const warn = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    global.fetch = jest.fn(async () => {
+      throw new TypeError("fetch failed: java.net.ConnectException: Failed to connect to /127.0.0.1:8851");
+    }) as unknown as typeof fetch;
+    const error = await getMe().catch((caught: unknown) => caught);
+    const message = apiErrorMessage(error, "GRIDGO could not check your access.");
+    expect(message).toBe("GRIDGO could not be reached. Check this phone’s connection, then try again.");
+    expect(message).not.toMatch(/java|fetch failed|127\.0\.0\.1/);
+    warn.mockRestore();
   });
 
   it("redeems a trimmed invite code", async () => {

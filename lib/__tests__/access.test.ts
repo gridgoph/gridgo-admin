@@ -165,6 +165,12 @@ describe("roles → tabs", () => {
     expect(roleLabel("super_admin")).toBe("Super Admin");
     expect(roleLabel("")).toBe("Staff");
   });
+
+  it("uses the role name Super Admin set when the API sends one", () => {
+    expect(roleLabel("qa_desk", "Front desk (no handout)")).toBe("Front desk (no handout)");
+    expect(roleLabel("qa_desk", "  ")).toBe("Qa desk");
+    expect(roleLabel("qa_desk", null)).toBe("Qa desk");
+  });
 });
 
 describe("normalizeInviteCode", () => {

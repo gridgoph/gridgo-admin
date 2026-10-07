@@ -142,8 +142,12 @@ const ADMIN_ROLE_LABELS: Record<string, string> = {
   super_admin: "Super Admin",
 };
 
-/** Human label for a staff role code, e.g. `hub_staff` → "Hub staff". */
-export function roleLabel(code: string): string {
+/**
+ * Human label for a staff role: the name Super Admin gave it when the API
+ * sends one, else the code in plain words (`hub_staff` → "Hub staff").
+ */
+export function roleLabel(code: string, name?: string | null): string {
+  if (name?.trim()) return name.trim();
   if (ADMIN_ROLE_LABELS[code]) return ADMIN_ROLE_LABELS[code];
   const words = code.replace(/[_-]+/g, " ").trim();
   if (!words) return "Staff";

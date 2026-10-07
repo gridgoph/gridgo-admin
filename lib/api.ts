@@ -37,6 +37,8 @@ export type StaffProfile = {
   name: string;
   /** Configurable staff role code, e.g. `hub_staff`. */
   role: string;
+  /** The role's name as Super Admin set it; absent from older API builds. */
+  roleName?: string | null;
   /** Only roles with this flag may record a hub handout. */
   canHandout: boolean;
 };
@@ -53,7 +55,8 @@ export type Hub = {
   id: string;
   name: string;
   point?: { label?: string | null; address?: string | null } | null;
-  schedule: HubSchedule;
+  /** `null` until Super Admin sets hub hours (`docs/HUB_HANDOVER_API.md`). */
+  schedule: HubSchedule | null;
 };
 
 export type Handout = {
@@ -268,7 +271,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
           data = text;
         }
       }
-      if (res.status !== 401 || attempt > 0 || !sentBearer || ignoreUnauthorized) break;
+      if (res.status !== 401 || attempt > 0 || !sentBearer) break;
       if (apiErrorCode(new ApiError(res.status, data)) === "unmapped_identity") break;
       token = await bearer({ skipCache: true });
       if (!token) {
@@ -280,7 +283,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (controller.signal.aborted) {
       throw new Error("GRIDGO did not answer in time. Check this phone’s connection, then try again.");
     }
-    throw caught;
+    // The platform's own text ("fetch failed: java.net.ConnectException …")
+    // means nothing at the counter.
+    if (__DEV__) console.warn("GRIDGO request failed", caught);
+    throw new Error("GRIDGO could not be reached. Check this phone’s connection, then try again.");
   } finally {
     clearTimeout(timer);
   }

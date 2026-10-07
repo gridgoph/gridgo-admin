@@ -160,7 +160,7 @@ function CodeStep() {
         length={OTP_LENGTH}
         disabled={submitting}
         autoFocus
-        accessibilityLabel="Client's code"
+        accessibilityLabel="Client’s code"
         accessibilityHint={`The ${OTP_LENGTH} digits the client shows you`}
         testID="client-otp"
       />
@@ -253,7 +253,7 @@ function Refused({ outcome }: { outcome: Extract<ClaimOutcome, { kind: "mismatch
         <Text className="text-body-lg text-text-secondary">
           {locked
             ? `Too many wrong codes for this QR. It is locked${wait ? ` — ${wait.toLowerCase()}` : ""}. Keep the package on the counter.`
-            : "The client's code does not match this QR. Keep the package on the counter."}
+            : "The client’s code does not match this QR. Keep the package on the counter."}
         </Text>
         {escalated ? (
           <StatusChip tone="info" icon="bell" label="Operations has been told" />
@@ -288,7 +288,7 @@ function Refused({ outcome }: { outcome: Extract<ClaimOutcome, { kind: "mismatch
 const STOPPED_COPY: Record<string, { title: string; body: string; icon: "warn" | "box" | "scan" }> = {
   not_found: {
     title: "Not a pick-up QR",
-    body: "This QR is not a GRIDGO order waiting at the hub. Ask the client to open the order's pick-up QR, then scan again.",
+    body: "This QR is not a GRIDGO order waiting at the hub. Ask the client to open the order’s pick-up QR, then scan again.",
     icon: "scan",
   },
   already_done: {
