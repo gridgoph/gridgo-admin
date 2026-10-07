@@ -90,7 +90,7 @@ export function classifyClaimError(error: unknown): ClaimOutcome {
       return {
         kind: "blocked",
         title: "Payment not confirmed",
-        body: "Do not hand over this order. The client's final payment is not confirmed yet. Call Operations.",
+        body: "Do not hand over this order. The client’s final payment is not confirmed yet. Call Operations.",
       };
     case "collection_not_available":
     case "handover_not_ready":
@@ -141,8 +141,8 @@ export function retryAfterLabel(retryAfter: string | null, now: Date = new Date(
 /** Default escalation reason, editable before sending. */
 export function defaultEscalationReason(outcome: ClaimOutcome): string {
   return outcome.kind === "locked"
-    ? "Client's code was refused five times at the hub. Package kept on the counter."
-    : "Client's code did not match the scanned QR at the hub. Package kept on the counter.";
+    ? "Client’s code was refused five times at the hub. Package kept on the counter."
+    : "Client’s code did not match the scanned QR at the hub. Package kept on the counter.";
 }
 
 /**

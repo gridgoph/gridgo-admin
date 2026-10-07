@@ -49,6 +49,12 @@ export const useSession = create<SessionState>((set) => ({
       })
       .catch((error: unknown) => {
         if (started !== generation) return;
+        // A failed re-check while already admitted keeps the last answer: the
+        // next foreground or request tries again instead of blanking the app.
+        if (useSession.getState().phase === "ready" && useSession.getState().access) {
+          set({ error: apiErrorMessage(error, "GRIDGO could not check your access.") });
+          return;
+        }
         set({
           phase: "error",
           error: apiErrorMessage(error, "GRIDGO could not check your access."),

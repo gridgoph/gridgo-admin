@@ -59,7 +59,7 @@ export default function HandoversScreen() {
               </Text>
               {staff ? (
                 <Text className="text-body-lg text-text-secondary">
-                  {staff.name}, {roleLabel(staff.role).toLowerCase()}
+                  {staff.name}, {roleLabel(staff.role, staff.roleName)}
                 </Text>
               ) : null}
             </View>

@@ -76,8 +76,8 @@ export function QrScanner({ onScan }: Props) {
           <Text className="text-center text-h3 text-text-primary">Camera is off</Text>
           <Text className="text-center text-body text-text-secondary">
             {blocked
-              ? "Turn on the camera for GRIDGO Admin in this phone's settings, or type the QR code below."
-              : "GRIDGO Admin needs the camera to scan the client's pick-up QR."}
+              ? "Turn on the camera for GRIDGO Admin in this phone’s settings, or type the QR code below."
+              : "GRIDGO Admin needs the camera to scan the client’s pick-up QR."}
           </Text>
         </View>
         <View className="w-full max-w-72">
@@ -109,7 +109,7 @@ export function QrScanner({ onScan }: Props) {
       <View pointerEvents="none" className="absolute bottom-0 left-0 right-0 items-center p-3">
         <View className="rounded-pill bg-scrim px-3 py-1.5">
           <Text className="text-body font-medium text-white" accessibilityLiveRegion="polite">
-            {notGridgo ? "Not a GRIDGO pick-up QR. Try again." : "Point at the client's QR code"}
+            {notGridgo ? "Not a GRIDGO pick-up QR. Try again." : "Point at the client’s QR code"}
           </Text>
         </View>
       </View>

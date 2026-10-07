@@ -43,7 +43,7 @@ export default function AccountScreen() {
             {granted?.staff && granted.staffRole === "staff" ? (
               <Row
                 label="Staff role"
-                value={`${roleLabel(granted.staff.role)}${granted.staff.canHandout ? ", can hand out orders" : ""}`}
+                value={`${roleLabel(granted.staff.role, granted.staff.roleName)}${granted.staff.canHandout ? ", can hand out orders" : ""}`}
               />
             ) : null}
             {granted?.adminRole ? (
