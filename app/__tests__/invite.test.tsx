@@ -53,6 +53,7 @@ describe("invite-only access", () => {
       kind: "granted",
       name: "Hub Person",
       staff: hubStaff,
+      staffRole: "staff",
       adminRole: null,
     });
   });

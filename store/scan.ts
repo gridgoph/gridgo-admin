@@ -1,5 +1,6 @@
 import { create } from "zustand";
 
+import { staffRequestRole } from "@/lib/access";
 import { claimHandover, escalateHandover } from "@/lib/api";
 import {
   claimSucceeded,
@@ -8,6 +9,7 @@ import {
   otpComplete,
   type ClaimOutcome,
 } from "@/lib/handover";
+import { useSession } from "@/store/session";
 
 /**
  * One handover at the counter: QR → client's code → the API's verdict.
@@ -57,7 +59,9 @@ export const useScan = create<ScanState>((set, get) => ({
     set({ submitting: true });
     let outcome: ClaimOutcome;
     try {
-      outcome = claimSucceeded(await claimHandover(qrToken, otp));
+      outcome = claimSucceeded(
+        await claimHandover(staffRequestRole(useSession.getState().access), qrToken, otp),
+      );
     } catch (error) {
       outcome = classifyClaimError(error);
     }
@@ -77,7 +81,7 @@ export const useScan = create<ScanState>((set, get) => ({
         ? outcome.escalatePath
         : null;
     if (!qrToken || !path) throw new Error("This handover cannot be escalated from here. Call Operations.");
-    await escalateHandover(path, reason, qrToken);
+    await escalateHandover(staffRequestRole(useSession.getState().access), path, reason, qrToken);
     set({ escalated: true });
   },
   reset: () => set({ ...initial }),

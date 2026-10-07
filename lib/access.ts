@@ -21,6 +21,9 @@ import {
  * - **Admin** (Operations or Super Admin membership) sees every staff
  *   member's handovers and the receipt-scan feed. Those feeds are selected
  *   with the admin membership, never the staff one.
+ * - Operations and Super Admin are staff too, without an invite: the API
+ *   grants them the staff routes through their own membership, so they select
+ *   those routes with it (`staffRole`), never with `staff`.
  */
 export type Access =
   /** Signed in, but GRIDGO grants this account nothing here. */
@@ -32,6 +35,8 @@ export type Access =
       /** Display name for the header and the handover log. */
       name: string;
       staff: StaffProfile | null;
+      /** The `X-GRIDGO-Role` for the staff routes; set whenever `staff` is. */
+      staffRole: RequestRole | null;
       adminRole: Extract<RequestRole, "ops_admin" | "super_admin"> | null;
     };
 
@@ -47,7 +52,7 @@ export function adminRoleFrom(
 
 export type AccessDeps = {
   getMe: () => Promise<Me>;
-  getStaffMe: () => Promise<StaffProfile>;
+  getStaffMe: (role: RequestRole) => Promise<StaffProfile>;
 };
 
 /**
@@ -70,19 +75,30 @@ export async function loadAccess(deps: AccessDeps): Promise<Access> {
   const memberships = me.memberships ?? [];
   const adminRole = adminRoleFrom(memberships);
   let staff: StaffProfile | null = null;
+  let staffRole: RequestRole | null = null;
   let paused = false;
   if (memberships.some((membership) => membership.role === "staff")) {
     try {
-      staff = await deps.getStaffMe();
+      staff = await deps.getStaffMe("staff");
+      staffRole = "staff";
     } catch (error) {
       if (!(error instanceof ApiError) || error.status !== 403) throw error;
       paused = true;
     }
   }
+  if (!staff && adminRole) {
+    try {
+      staff = await deps.getStaffMe(adminRole);
+      staffRole = adminRole;
+    } catch (error) {
+      // An API without admin staff access still leaves the Admin view.
+      if (!(error instanceof ApiError) || error.status !== 403) throw error;
+    }
+  }
 
   if (!staff && !adminRole) return paused ? { kind: "paused" } : { kind: "none" };
   const name = staff?.name || me.user?.name?.trim() || "GRIDGO staff";
-  return { kind: "granted", name, staff, adminRole };
+  return { kind: "granted", name, staff, staffRole, adminRole };
 }
 
 export type AccessTabs = {
@@ -109,12 +125,26 @@ export function accessTabs(access: Access | null): AccessTabs {
 /** The role to send for the hub/SOP read: staff first, else the admin view. */
 export function hubReadRole(access: Access | null): RequestRole | null {
   if (access?.kind !== "granted") return null;
-  if (access.staff) return "staff";
-  return access.adminRole;
+  return access.staffRole ?? access.adminRole;
 }
+
+/**
+ * The role for a staff route (claim, escalate, own log). Those screens exist
+ * only with staff access; anyone else falls back to `staff`, which the API
+ * refuses.
+ */
+export function staffRequestRole(access: Access | null): RequestRole {
+  return (access?.kind === "granted" && access.staffRole) || "staff";
+}
+
+const ADMIN_ROLE_LABELS: Record<string, string> = {
+  ops_admin: "Operations",
+  super_admin: "Super Admin",
+};
 
 /** Human label for a staff role code, e.g. `hub_staff` → "Hub staff". */
 export function roleLabel(code: string): string {
+  if (ADMIN_ROLE_LABELS[code]) return ADMIN_ROLE_LABELS[code];
   const words = code.replace(/[_-]+/g, " ").trim();
   if (!words) return "Staff";
   return words.charAt(0).toUpperCase() + words.slice(1);
