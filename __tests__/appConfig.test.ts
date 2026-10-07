@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
-import { buildVersion, clerkPublishableKey } from "../app.config";
+import { buildVersion, clerkPublishableKey, googleServicesFile } from "../app.config";
 import { clerkPublishableKey as runtimeClerkKey } from "@/lib/clerkAuth";
 
 const root = join(__dirname, "..");
@@ -63,5 +63,21 @@ describe("config plugins and assets", () => {
       ),
     ].filter(Boolean) as string[];
     for (const path of paths) expect(existsSync(join(root, path))).toBe(true);
+  });
+});
+
+describe("Firebase config", () => {
+  it("prefers the explicit path and resolves relative paths against the project", () => {
+    expect(googleServicesFile(" /private/firebase.json ", root, () => true)).toBe("/private/firebase.json");
+    expect(googleServicesFile("firebase.json", root, () => true)).toBe(join(root, "firebase.json"));
+  });
+
+  it("uses the root copy when present, but allows checks without Firebase", () => {
+    expect(googleServicesFile(undefined, root, () => true)).toBe(join(root, "google-services.json"));
+    expect(googleServicesFile("  ", root, () => false)).toBeUndefined();
+  });
+
+  it("never falls back when an explicitly named path is missing", () => {
+    expect(() => googleServicesFile("missing.json", root, (path) => path.endsWith("google-services.json"))).toThrow(/GOOGLE_SERVICES_JSON/);
   });
 });
