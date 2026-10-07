@@ -56,27 +56,32 @@ describe("the release APK", () => {
     const verify = find("scripts/verify-release-apk.sh");
     expect(hasPublicEnv(apkSteps[verify])).toBe(true);
     expect(verify).toBeGreaterThan(find("gradlew assembleRelease"));
-    expect(find("upload-apk admin")).toBeGreaterThan(verify);
-    expect(find("gh release create")).toBeGreaterThan(find("upload-apk admin"));
-    expect(find("upload-artifact")).toBeGreaterThan(find("gh release create"));
+    expect(find("upload-artifact")).toBeGreaterThan(verify);
   });
 
-  it("uploads under this app's own name, only from a merge to main, with a pinned host", () => {
-    const publish = apkSteps[find("upload-apk admin")];
-    expect(publish).toMatch(/'upload-apk admin' < "\$apk"/);
-    expect(publish).toMatch(/if:\s*github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
-    expect(publish).toContain("StrictHostKeyChecking=yes");
-    expect(release).not.toContain("upload-apk rider");
+  it("keeps Admin builds only as short-lived workflow artifacts", () => {
+    expect(release).not.toMatch(/upload-apk|DEPLOY_|gridgo\.talasora\.com\/download|gh release|contents: write/);
+    expect(apkSteps[find("upload-artifact")]).toContain("retention-days: 7");
+    expect(apkSteps[find("upload-artifact")]).not.toContain("continue-on-error");
   });
 
   it("destroys every credential however the job ends", () => {
     const cleanup = apkSteps.find((step) => step.includes("rm -f") && step.includes("release.jks"));
     expect(cleanup).toMatch(/if:\s*always\(\)/);
-    expect(cleanup).toContain("deploy_key");
+    expect(cleanup).toContain("google-services.json");
   });
 
-  it("needs no Firebase or map secret: the Admin App has neither", () => {
-    expect(release).not.toMatch(/secrets\.(GOOGLE_SERVICES_JSON_BASE64|EXPO_PUBLIC_CARTO_API_KEY)/);
+  it("stages Firebase outside the workspace and validates Admin before config and prebuild", () => {
+    const stage = find("name: Stage the Firebase config");
+    expect(stage).toBeGreaterThan(-1);
+    expect(stage).toBeLessThan(find("expo config --type public"));
+    expect(stage).toBeLessThan(find("expo prebuild"));
+    expect(apkSteps[stage]).toContain("secrets.GOOGLE_SERVICES_JSON_BASE64");
+    expect(apkSteps[stage]).toContain('pkgs.includes("ph.gridgo.admin")');
+    expect(apkSteps[stage]).toContain('GOOGLE_SERVICES_JSON=$RUNNER_TEMP/google-services.json');
+    expect(apkSteps[stage]).toContain('>> "$GITHUB_ENV"');
+    expect(readFileSync(join(root, ".gitignore"), "utf8")).toMatch(/^google-services\.json$/m);
+    expect(release).not.toContain("secrets.EXPO_PUBLIC_CARTO_API_KEY");
   });
 });
 
