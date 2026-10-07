@@ -3,22 +3,17 @@ name: Android release APK
 # Invited GRIDGO staff sideload this file, so every build that reaches them
 # must be a real signed release pointed at the deployed API — not a debug
 # artifact, and not one that quietly points at loopback. Mirrors gridgo-rider's
-# workflow; the Admin App has no push and no map, so there is no Firebase
-# config and no CARTO key.
+# workflow; Firebase comes from a repository secret. Admin builds must never
+# be uploaded to the public download page.
 #
 # Pull requests run .github/workflows/test.yml instead. Until this
-# repository's signing, API/Clerk and deploy secrets exist, the apk job fails
+# repository's signing, API/Clerk and Firebase secrets exist, the apk job fails
 # at its first secret check; that is expected (README → Release).
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
-    inputs:
-      publish_release:
-        description: Also publish a GitHub Release for this build
-        type: boolean
-        default: false
 
 # A release build takes ~20 minutes; never run two for the same ref.
 concurrency:
@@ -66,8 +61,6 @@ jobs:
     needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    permissions:
-      contents: write # gh release create
     env:
       # Stamps the version staff read on the phone — see app.config.ts.
       GRIDGO_BUILD_NUMBER: ${{ github.run_number }}
@@ -108,6 +101,31 @@ jobs:
           # in ~/.gradle, and a cache step would upload them out of the job.
 
       - run: npm ci
+
+      - name: Stage the Firebase config
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "${GOOGLE_SERVICES_JSON_BASE64:-}" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON_BASE64 is not set; the APK would ship without Firebase config"
+            exit 1
+          fi
+          printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > "$RUNNER_TEMP/google-services.json"
+          # Prove it is the config for this app before a 20-minute build, not
+          # after: a rider or supplier file would prebuild happily and then
+          # never receive anything addressed to ph.gridgo.admin.
+          node -e '
+            const c = require(process.env.RUNNER_TEMP + "/google-services.json");
+            const pkgs = c.client.map((x) => x.client_info.android_client_info.package_name);
+            if (!pkgs.includes("ph.gridgo.admin")) {
+              console.error("::error::google-services.json has no entry for ph.gridgo.admin");
+              process.exit(1);
+            }
+            console.log("Firebase project " + c.project_info.project_id + " covers " + pkgs.join(", "));
+          '
+          echo "GOOGLE_SERVICES_JSON=$RUNNER_TEMP/google-services.json" >> "$GITHUB_ENV"
 
       - name: Resolve the public app config
         id: config
@@ -233,119 +251,17 @@ jobs:
             echo "| Public config | deployed API and Clerk values verified inside the bundle |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Only a merge to the default branch may replace the file staff download.
-      # Not a pull request, and not a manual dispatch from a branch — either
-      # would put unreviewed code on the download.
-      #
-      # The deploy key carries a forced command server-side; `upload-apk admin`
-      # arrives as SSH_ORIGINAL_COMMAND. The server validates the bytes are a
-      # real APK, stores it as gridgo-admin.apk and writes a sha256 sidecar.
-      # The server's forced command must know the `admin` name before this
-      # step can pass. The app stays invite-only either way: the APK is useless
-      # without a GRIDGO sign-in and a redeemed invite code.
-      #
-      # Runs before upload-artifact: Actions storage quota filling that step
-      # must not leave https://gridgo.talasora.com/download on a stale APK.
-      - name: Publish the APK to the captain's server
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-          APK: ${{ steps.config.outputs.apk }}
-        run: |
-          set -euo pipefail
-          missing=""
-          for name in DEPLOY_SSH_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
-            [ -n "${!name:-}" ] || missing="$missing $name"
-          done
-          if [ -n "$missing" ]; then
-            # Loud, not skipped: a silent no-op here leaves the landing site
-            # serving an older APK with nobody aware it went stale.
-            echo "::error::missing repository secret(s):$missing"
-            exit 1
-          fi
-
-          umask 077
-          key="$RUNNER_TEMP/deploy_key"
-          hosts="$RUNNER_TEMP/deploy_known_hosts"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$key"
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$hosts"
-
-          apk="$RUNNER_TEMP/out/$APK"
-          # StrictHostKeyChecking against the pinned known_hosts: an unknown
-          # host is a failed upload, never a prompt or a blind trust.
-          response="$(ssh -i "$key" \
-            -o IdentitiesOnly=yes \
-            -o UserKnownHostsFile="$hosts" \
-            -o StrictHostKeyChecking=yes \
-            -o BatchMode=yes \
-            -o ConnectTimeout=30 \
-            "$DEPLOY_USER@$DEPLOY_HOST" 'upload-apk admin' < "$apk")"
-          printf '%s\n' "$response"
-
-          # If the server echoes the digest it stored, it has to be the file we
-          # built — a truncated upload that still exits 0 would otherwise serve
-          # a broken APK to everyone who downloads it.
-          local_sha="$(sha256sum "$apk" | cut -d' ' -f1)"
-          echo "built sha256: $local_sha"
-          remote_sha="$(printf '%s' "$response" | grep -oiE '[0-9a-f]{64}' | head -1 || true)"
-          if [ -n "$remote_sha" ] && [ "$(printf '%s' "$remote_sha" | tr 'A-F' 'a-f')" != "$local_sha" ]; then
-            echo "::error::the server stored a different file than this build produced"
-            exit 1
-          fi
-
-          echo "| Published | \`gridgo-admin.apk\` on the captain's server |" >> "$GITHUB_STEP_SUMMARY"
-
-      # Only the default branch names a release. A build from anywhere else is
-      # downloadable as a run artifact and nothing more. This step uses the
-      # on-disk APK, so it must run before upload-artifact: a full Actions
-      # storage quota fails that step and would otherwise skip the Release.
-      #
-      # After the landing upload, never before it: the in-app update prompt
-      # reads GitHub's latest release but "Update now" downloads from the
-      # landing site, so a release published first (or one whose upload then
-      # failed) offers build N to phones while serving N-1 — they reinstall
-      # the same build and are offered it again. Only a push to main uploads,
-      # so only that run may mark its release latest; a manual dispatch with
-      # publish_release still gets a release, but no phone is offered it.
-      - name: Publish the GitHub Release
-        if: github.ref == 'refs/heads/main' || github.event.inputs.publish_release == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.config.outputs.version }}
-          APK: ${{ steps.config.outputs.apk }}
-          SIZE: ${{ steps.apk.outputs.size }}
-          LATEST: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          set -euo pipefail
-          notes="$(printf '%s\n' \
-            "Signed release APK for sideloading ($SIZE). Install it on the phone directly." \
-            "" \
-            "Commit \`${GITHUB_SHA::7}\`, build $GITHUB_RUN_NUMBER." \
-            "Verified in CI: signed with the release key, and deployed API and Clerk values are inlined in the JS bundle.")"
-          gh release create "v$VERSION" "$RUNNER_TEMP/out/$APK" \
-            --target "$GITHUB_SHA" \
-            --title "GRIDGO Admin $VERSION" \
-            --notes "$notes" \
-            --latest="$LATEST"
-
-      # Best-effort CI convenience. Quota-full here used to skip the two
-      # publish steps above and leave the landing site stale. continue-on-error
-      # keeps a green job when the APK already reached staff.
+      # Admin APKs stay in short-lived workflow artifacts, never public releases.
       - uses: actions/upload-artifact@v4
-        continue-on-error: true
         with:
           name: ${{ steps.config.outputs.stem }}
           path: ${{ runner.temp }}/out/*.apk
           if-no-files-found: error
-          retention-days: 90
+          retention-days: 7
 
-      - name: Remove the signing key and deploy credentials
+      - name: Remove the signing key and Firebase config
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/release.jks" \
                 "$HOME/.gradle/gradle.properties" \
-                "$RUNNER_TEMP/deploy_key" \
-                "$RUNNER_TEMP/deploy_known_hosts"
+                "$RUNNER_TEMP/google-services.json"

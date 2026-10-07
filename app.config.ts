@@ -1,8 +1,11 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 import type { ConfigContext, ExpoConfig } from "expo/config";
 
 /**
  * app.json stays the whole configuration. This file only stamps the build
- * identity and the Clerk publishable key onto it — the same rules as
+ * identity, Firebase config and Clerk publishable key onto it — the same rules as
  * gridgo-rider and gridgo-supplier.
  *
  * A sideloaded APK has no store listing, so the version staff read in
@@ -19,8 +22,8 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
  * relative `.ts` import. `__tests__/appConfig.test.ts` calls these exports
  * directly, so the rules are tested where they run.
  *
- * Unlike the rider and supplier apps there is no Firebase config: the Admin
- * App does not register for push.
+ * Firebase config follows the same optional local file / required CI secret
+ * convention as the client, rider and supplier apps.
  */
 
 const RELEASE_LINE = /^(\d+)\.(\d+)(?:\.|$)/;
@@ -78,6 +81,28 @@ export function buildVersion(
   return { versionName: `${line[1]}.${line[2]}.${versionCode}`, versionCode };
 }
 
+/** Resolve the private Firebase file; an explicitly broken path is an error. */
+export function googleServicesFile(
+  envPath: string | null | undefined,
+  projectRoot: string,
+  fileExists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const named = (envPath ?? "").trim();
+  if (named) {
+    const path = resolve(projectRoot, named);
+    if (!fileExists(path)) {
+      throw new Error(
+        `GOOGLE_SERVICES_JSON points at "${named}", which does not exist. ` +
+          "A build with a broken Firebase path would install and never receive a notification.",
+      );
+    }
+    return path;
+  }
+
+  const local = resolve(projectRoot, "google-services.json");
+  return fileExists(local) ? local : undefined;
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const { name, slug, version } = config;
   if (!name || !slug || !version) {
@@ -88,6 +113,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     version,
     process.env.GRIDGO_BUILD_NUMBER,
   );
+  const googleServices = googleServicesFile(process.env.GOOGLE_SERVICES_JSON, __dirname);
   const clerkKey = clerkPublishableKey(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
 
   return {
@@ -102,6 +128,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     android: {
       ...config.android,
       versionCode,
+      ...(googleServices ? { googleServicesFile: googleServices } : {}),
     },
   };
 };

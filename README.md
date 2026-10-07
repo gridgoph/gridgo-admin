@@ -57,7 +57,7 @@ npm test -- --maxWorkers=2
 
 ## Release
 
-Pull requests and pushes to `dev`/`main` run `.github/workflows/test.yml`. A merge to `main` (or a manual run) runs `.github/workflows/android-release.yml`, which mirrors the other GRIDGO apps: signed release APK → verified with `scripts/verify-release-apk.sh` → uploaded as `gridgo-admin.apk` to the GRIDGO server → GitHub Release → Actions artifact.
+Pull requests and pushes to `dev`/`main` run `.github/workflows/test.yml`. A merge to `main` (or a manual run) runs `.github/workflows/android-release.yml`, which mirrors the other GRIDGO apps: signed release APK → verified with `scripts/verify-release-apk.sh` → Actions artifact (retained for 7 days).
 
 It needs these **repository secrets**; until they exist the release job fails at its first check, by design:
 
@@ -68,12 +68,11 @@ It needs these **repository secrets**; until they exist the release job fails at
 | `ANDROID_KEY_ALIAS` | Key alias in that keystore |
 | `EXPO_PUBLIC_API_URL` | The deployed API URL, inlined into the bundle |
 | `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` | The GRIDGO Clerk **live** publishable key (`pk_live_…`) |
-| `DEPLOY_SSH_KEY` | Deploy key for the APK upload (forced command `upload-apk admin`) |
-| `DEPLOY_HOST` | Upload host |
-| `DEPLOY_USER` | Upload user |
-| `DEPLOY_KNOWN_HOSTS` | Pinned host key for the upload |
+| `GOOGLE_SERVICES_JSON_BASE64` | Base64 Firebase config containing `ph.gridgo.admin` |
 
-The upload server's forced command must accept the `admin` name. The app stays invite-only regardless of where the APK is hosted: it does nothing without a GRIDGO sign-in and a redeemed invite.
+Admin APKs must never be published to the public GRIDGO download page. The public repository must not publish APKs through GitHub Releases either. The workflow keeps APKs only as seven-day Actions artifacts and has no server upload step or deploy credentials. Release signing credentials are supplied separately; no release key is stored in this repository.
+
+For local builds, set `GOOGLE_SERVICES_JSON` to the Firebase JSON file path or place a gitignored `google-services.json` in the repository root. An explicit missing path fails; development checks without a file remain supported. CI requires the secret and validates the Android package before prebuild. Firebase configuration alone does not add device-token registration or notification handling to the app.
 
 ## Project notes
 
