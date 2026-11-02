@@ -5,8 +5,9 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 
 /**
  * app.json stays the whole configuration. This file only stamps the build
- * identity, Firebase config and Clerk publishable key onto it — the same rules as
- * gridgo-rider and gridgo-supplier.
+ * identity, Firebase config, Clerk publishable key and (for the Play upload
+ * only) the EAS project link onto it — the same rules as gridgo-rider and
+ * gridgo-supplier.
  *
  * A sideloaded APK has no store listing, so the version staff read in
  * Settings → Apps is the only handle anyone has on "which build is on this
@@ -103,6 +104,40 @@ export function googleServicesFile(
   return fileExists(local) ? local : undefined;
 }
 
+const EAS_PROJECT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EAS_OWNER = /^[a-z0-9][a-z0-9_-]*$/i;
+
+export type EasProject = { owner: string; projectId: string };
+
+/**
+ * The EAS project this app is linked to, which only the Play upload needs
+ * (`eas submit` in `.github/workflows/android-release.yml`). The captain has
+ * not created it yet, so nothing is committed: the workflow passes the
+ * repository variables `EAS_OWNER` and `EAS_PROJECT_ID`, and every other
+ * build — APK, AAB, `expo start` — runs without them.
+ *
+ * Both or neither: a half-linked project would make `eas submit` prompt to
+ * create one, which a non-interactive run cannot answer.
+ */
+export function easProject(
+  owner: string | null | undefined,
+  projectId: string | null | undefined,
+): EasProject | undefined {
+  const o = (owner ?? "").trim();
+  const id = (projectId ?? "").trim();
+  if (!o && !id) return undefined;
+  if (!o || !id) {
+    throw new Error("Set both EAS_OWNER and EAS_PROJECT_ID, or neither.");
+  }
+  if (!EAS_OWNER.test(o)) {
+    throw new Error(`EAS_OWNER must be an Expo account name, got "${o}"`);
+  }
+  if (!EAS_PROJECT_ID.test(id)) {
+    throw new Error("EAS_PROJECT_ID must be the EAS project's UUID");
+  }
+  return { owner: o, projectId: id };
+}
+
 export default ({ config }: ConfigContext): ExpoConfig => {
   const { name, slug, version } = config;
   if (!name || !slug || !version) {
@@ -115,15 +150,18 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   );
   const googleServices = googleServicesFile(process.env.GOOGLE_SERVICES_JSON, __dirname);
   const clerkKey = clerkPublishableKey(process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY);
+  const eas = easProject(process.env.EAS_OWNER, process.env.EAS_PROJECT_ID);
 
   return {
     ...config,
     name,
     slug,
+    ...(eas ? { owner: eas.owner } : {}),
     version: versionName,
     extra: {
       ...config.extra,
       ...(clerkKey ? { clerkPublishableKey: clerkKey } : {}),
+      ...(eas ? { eas: { ...config.extra?.eas, projectId: eas.projectId } } : {}),
     },
     android: {
       ...config.android,

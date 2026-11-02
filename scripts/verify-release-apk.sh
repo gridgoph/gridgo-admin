@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# Verify a release APK before anyone sideloads it.
+# Verify a release APK before anyone sideloads it, or a release Android App
+# Bundle (.aab) before it goes to a Google Play testing track.
 #
 # Two things can be wrong with a build that looks perfectly green in CI, and
 # both of them only show up on a staff member's phone:
@@ -18,16 +19,27 @@
 # actual artifact. Nothing this script prints contains a password, a key, or
 # the API URL — a certificate fingerprint is public (it ships inside the APK).
 #
+# An AAB is checked the same way. It is jar-signed rather than APK-signed, so
+# its certificate is read with `jarsigner`/`keytool -printcert -jarfile`
+# instead of `apksigner`, and its bundle sits under the `base/` module. Google
+# Play re-signs what it serves with the app signing key; the upload key checked
+# here is what Play Console accepts the upload with.
+#
 # Usage:
 #   ANDROID_KEYSTORE_PATH=… ANDROID_KEYSTORE_PASSWORD=… ANDROID_KEY_ALIAS=… \
 #   EXPO_PUBLIC_API_URL=… EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=… \
-#   scripts/verify-release-apk.sh path/to/app-release.apk
+#   scripts/verify-release-apk.sh path/to/app-release.apk|path/to/app-release.aab
 
 set -euo pipefail
 
 apk="${1:-}"
-[ -n "$apk" ] || { echo "usage: $0 <apk>" >&2; exit 2; }
-[ -f "$apk" ] || { echo "FAIL: no APK at $apk" >&2; exit 1; }
+[ -n "$apk" ] || { echo "usage: $0 <apk|aab>" >&2; exit 2; }
+[ -f "$apk" ] || { echo "FAIL: no APK or AAB at $apk" >&2; exit 1; }
+
+case "$apk" in
+  *.aab) kind="AAB"; bundle="base/assets/index.android.bundle" ;;
+  *) kind="APK"; bundle="assets/index.android.bundle" ;;
+esac
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
@@ -50,7 +62,7 @@ esac
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-# --- locate apksigner -------------------------------------------------------
+# --- 1. signed with the release key, not the debug key ----------------------
 
 find_apksigner() {
   local sdk="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}" candidate
@@ -62,22 +74,41 @@ find_apksigner() {
   command -v apksigner || return 1
 }
 
-apksigner="$(find_apksigner)" || fail "apksigner not found (need the Android SDK build-tools)"
+if [ "$kind" = "AAB" ]; then
+  command -v jarsigner >/dev/null || fail "jarsigner not found (need a JDK)"
+  # An unsigned bundle still exits 0 here ("jar is unsigned."), so the verdict
+  # line is what counts.
+  jarsigner -verify "$apk" >"$work/verify.out" 2>&1 ||
+    fail "jarsigner could not verify the AAB signature: $(cat "$work/verify.out")"
+  grep -qF 'jar verified.' "$work/verify.out" ||
+    fail "the AAB is not signed: $(cat "$work/verify.out")"
 
-# --- 1. signed with the release key, not the debug key ----------------------
+  keytool -printcert -jarfile "$apk" >"$work/certs.txt" </dev/null 2>&1 ||
+    fail "keytool could not read the AAB certificate"
 
-"$apksigner" verify "$apk" >/dev/null 2>"$work/verify.err" ||
-  fail "apksigner could not verify the APK signature: $(cat "$work/verify.err")"
+  if grep -qi 'CN=Android Debug' "$work/certs.txt"; then
+    fail "AAB is signed with the Android debug key"
+  fi
 
-"$apksigner" verify --print-certs "$apk" >"$work/certs.txt"
+  apk_digest="$(grep -im1 'SHA256:' "$work/certs.txt" |
+    awk '{print $2}' | tr -d ':' | tr 'A-F' 'a-f')"
+  [ -n "$apk_digest" ] || fail "keytool printed no SHA-256 certificate fingerprint for the AAB"
+else
+  apksigner="$(find_apksigner)" || fail "apksigner not found (need the Android SDK build-tools)"
 
-if grep -qi 'CN=Android Debug' "$work/certs.txt"; then
-  fail "APK is signed with the Android debug key"
+  "$apksigner" verify "$apk" >/dev/null 2>"$work/verify.err" ||
+    fail "apksigner could not verify the APK signature: $(cat "$work/verify.err")"
+
+  "$apksigner" verify --print-certs "$apk" >"$work/certs.txt"
+
+  if grep -qi 'CN=Android Debug' "$work/certs.txt"; then
+    fail "APK is signed with the Android debug key"
+  fi
+
+  apk_digest="$(grep -im1 'certificate SHA-256 digest' "$work/certs.txt" |
+    awk '{print $NF}' | tr 'A-F' 'a-f')"
+  [ -n "$apk_digest" ] || fail "apksigner printed no SHA-256 certificate digest"
 fi
-
-apk_digest="$(grep -im1 'certificate SHA-256 digest' "$work/certs.txt" |
-  awk '{print $NF}' | tr 'A-F' 'a-f')"
-[ -n "$apk_digest" ] || fail "apksigner printed no SHA-256 certificate digest"
 
 # keytool reads the store password from stdin, keeping it out of the process list.
 printf '%s\n' "$ANDROID_KEYSTORE_PASSWORD" |
@@ -90,19 +121,18 @@ key_digest="$(grep -im1 'SHA256:' "$work/keystore.txt" |
 [ -n "$key_digest" ] || fail "keytool printed no SHA-256 fingerprint"
 
 [ "$apk_digest" = "$key_digest" ] ||
-  fail "APK is signed by a different certificate than alias '$ANDROID_KEY_ALIAS'"
+  fail "$kind is signed by a different certificate than alias '$ANDROID_KEY_ALIAS'"
 
 echo "OK: signed by alias '$ANDROID_KEY_ALIAS' (cert SHA-256 $apk_digest)"
 
 # --- 2. deployed API and Clerk config are baked into the bundle -------------
 
-bundle="assets/index.android.bundle"
 unzip -p "$apk" "$bundle" >"$work/bundle.bin" 2>/dev/null ||
-  fail "$bundle is missing from the APK"
+  fail "$bundle is missing from the $kind"
 [ -s "$work/bundle.bin" ] || fail "$bundle is empty"
 
 grep -aqF -- "$EXPO_PUBLIC_API_URL" "$work/bundle.bin" ||
-  fail "the deployed API URL is not in $bundle — EXPO_PUBLIC_API_URL was not set for the build step, so this APK points at loopback"
+  fail "the deployed API URL is not in $bundle — EXPO_PUBLIC_API_URL was not set for the build step, so this $kind points at loopback"
 
 if grep -aqF -- 'EXPO_PUBLIC_API_URL' "$work/bundle.bin"; then
   fail "the variable name survives in $bundle — the value was not inlined at bundle time"
