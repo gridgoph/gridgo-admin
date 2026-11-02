@@ -1,10 +1,19 @@
-name: Android release APK
+name: Android release APK or Play testing bundle
 
 # Invited GRIDGO staff sideload this file, so every build that reaches them
 # must be a real signed release pointed at the deployed API — not a debug
 # artifact, and not one that quietly points at loopback. Mirrors gridgo-rider's
 # workflow; Firebase comes from a repository secret. Admin builds must never
 # be uploaded to the public download page.
+#
+# A manual dispatch with play_bundle builds a Google Play App Bundle (AAB)
+# instead, kept as an Actions artifact. That run never touches the APK path.
+#
+# submit_to_play, together with play_bundle, also hands that verified AAB to
+# EAS Submit for a private Play testing track (18 Oct 2026, Q2 B: only invited
+# staff accounts are testers): internal by default, or closed (alpha) when
+# explicitly selected. Builds stay here with the upload key; EAS only uploads.
+# Never the production track, never a promotion. See README.md → Release.
 #
 # Pull requests run .github/workflows/test.yml instead. Until this
 # repository's signing, API/Clerk and Firebase secrets exist, the apk job fails
@@ -14,10 +23,33 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      play_bundle:
+        description: >-
+          Build a signed Google Play bundle (AAB) as an Actions artifact instead
+          of the APK.
+        type: boolean
+        default: false
+      submit_to_play:
+        description: >-
+          With play_bundle only: also upload the verified AAB to Google Play's
+          selected testing track with EAS Submit. Ignored without play_bundle.
+        type: boolean
+        default: false
+      play_track:
+        description: >-
+          Testing track for submit_to_play only: internal or closed (alpha).
+          Ignored unless play_bundle and submit_to_play are both enabled.
+        type: choice
+        default: internal
+        options:
+          - internal
+          - closed
 
 # A release build takes ~20 minutes; never run two for the same ref.
+# A Play bundle run gets its own group, so it never cancels a main release.
 concurrency:
-  group: android-apk-${{ github.ref }}
+  group: android-apk-${{ github.ref }}${{ github.event.inputs.play_bundle == 'true' && '-play' || '' }}
   cancel-in-progress: true
 
 permissions:
@@ -54,7 +86,7 @@ jobs:
         run: npm test -- --ci --maxWorkers=2
 
   apk:
-    name: Signed release APK
+    name: ${{ github.event.inputs.play_bundle == 'true' && 'Signed Play bundle (AAB)' || 'Signed release APK' }}
     # Kept even though pull_request is not a trigger: if one is ever added,
     # a pull request still gets the checks above and nothing else.
     if: github.event_name != 'pull_request'
@@ -63,10 +95,40 @@ jobs:
     timeout-minutes: 60
     env:
       # Stamps the version staff read on the phone — see app.config.ts.
+      # Also the Play versionCode: every run of this workflow, APK or AAB, has
+      # a higher run number than the runs before it, and Play only accepts a
+      # versionCode above every one it has seen. Re-running a run keeps its
+      # number, so a re-run's AAB cannot be uploaded over the original's.
       GRIDGO_BUILD_NUMBER: ${{ github.run_number }}
 
     steps:
       - uses: actions/checkout@v4
+
+      # Before the 20-minute build, not after it: a submission without its
+      # Play Console and EAS values can only fail at the end. Names what is
+      # missing and never prints a value. The EAS project link is a pair of
+      # repository *variables* (public identifiers, read by app.config.ts);
+      # the token and the service-account key are secrets.
+      - name: Check the Play submission values
+        if: github.event.inputs.play_bundle == 'true' && github.event.inputs.submit_to_play == 'true'
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          EAS_OWNER: ${{ vars.EAS_OWNER }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for name in EXPO_TOKEN GOOGLE_PLAY_SERVICE_ACCOUNT_JSON; do
+            [ -n "${!name:-}" ] || missing="$missing secret:$name"
+          done
+          for name in EAS_OWNER EAS_PROJECT_ID; do
+            [ -n "${!name:-}" ] || missing="$missing variable:$name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::submit_to_play needs the captain's Play/EAS values (README → Release); missing:$missing"
+            exit 1
+          fi
 
       - name: Free disk space for the Android build
         run: |
@@ -137,11 +199,15 @@ jobs:
           npx expo config --type public --json > "$RUNNER_TEMP/app.config.json"
           version="$(node -p "require('$RUNNER_TEMP/app.config.json').version")"
           code="$(node -p "require('$RUNNER_TEMP/app.config.json').android.versionCode")"
+          package="$(node -p "require('$RUNNER_TEMP/app.config.json').android.package")"
           stem="gridgo-admin-$version-${GITHUB_SHA::7}"
           {
             echo "version=$version"
+            echo "code=$code"
+            echo "package=$package"
             echo "stem=$stem"
             echo "apk=$stem.apk"
+            echo "aab=$stem.aab"
           } >> "$GITHUB_OUTPUT"
           echo "GRIDGO Admin $version (versionCode $code)"
 
@@ -197,6 +263,7 @@ jobs:
           } > "$HOME/.gradle/gradle.properties"
 
       - name: Build the release APK
+        if: github.event.inputs.play_bundle != 'true'
         working-directory: android
         env:
           # The load-bearing line of this whole workflow. EXPO_PUBLIC_* values
@@ -219,7 +286,29 @@ jobs:
           esac
           ./gradlew assembleRelease --no-daemon
 
+      # The Play bundle: same injected upload key, same public configuration.
+      # This app has no side-load update prompt, so unlike gridgo-rider there
+      # is no distribution flag to flip; the bundle carries the APK's JS.
+      - name: Build the Play bundle
+        if: github.event.inputs.play_bundle == 'true'
+        working-directory: android
+        env:
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_PUBLIC_API_URL:-}" ]; then
+            echo "::error::EXPO_PUBLIC_API_URL is not set for the build step"
+            exit 1
+          fi
+          case "${EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY:-}" in
+            pk_live_*) ;;
+            *) echo "::error::release builds require a Clerk pk_live_* publishable key"; exit 1 ;;
+          esac
+          ./gradlew bundleRelease --no-daemon
+
       - name: Verify signature and baked-in public config
+        if: github.event.inputs.play_bundle != 'true'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -228,7 +317,18 @@ jobs:
           EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
         run: scripts/verify-release-apk.sh android/app/build/outputs/apk/release/app-release.apk
 
+      - name: Verify the Play bundle's signature and baked-in public config
+        if: github.event.inputs.play_bundle == 'true'
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+          EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        run: scripts/verify-release-apk.sh android/app/build/outputs/bundle/release/app-release.aab
+
       - name: Name the build
+        if: github.event.inputs.play_bundle != 'true'
         id: apk
         env:
           VERSION: ${{ steps.config.outputs.version }}
@@ -253,15 +353,145 @@ jobs:
 
       # Admin APKs stay in short-lived workflow artifacts, never public releases.
       - uses: actions/upload-artifact@v4
+        if: github.event.inputs.play_bundle != 'true'
         with:
           name: ${{ steps.config.outputs.stem }}
           path: ${{ runner.temp }}/out/*.apk
           if-no-files-found: error
           retention-days: 7
 
-      - name: Remove the signing key and Firebase config
+      # Explicit allowlist: dispatch input can never name a production track.
+      # Resolve once so EAS Submit and the summaries agree.
+      - name: Select the Play testing track
+        id: play-track
+        if: github.event.inputs.play_bundle == 'true' && github.event.inputs.submit_to_play == 'true'
+        env:
+          REQUESTED_TRACK: ${{ github.event.inputs.play_track }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED_TRACK" in
+            ""|internal)
+              echo "profile=production" >> "$GITHUB_OUTPUT"
+              echo "track=internal" >> "$GITHUB_OUTPUT"
+              echo "label=internal testing" >> "$GITHUB_OUTPUT"
+              ;;
+            closed)
+              echo "profile=closed" >> "$GITHUB_OUTPUT"
+              echo "track=alpha" >> "$GITHUB_OUTPUT"
+              echo "label=closed testing" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::unsupported Play testing track"
+              exit 1
+              ;;
+          esac
+
+      - name: Name the Play bundle
+        if: github.event.inputs.play_bundle == 'true'
+        env:
+          VERSION: ${{ steps.config.outputs.version }}
+          CODE: ${{ steps.config.outputs.code }}
+          AAB: ${{ steps.config.outputs.aab }}
+          SUBMIT: ${{ github.event.inputs.submit_to_play }}
+          TRACK_LABEL: ${{ steps.play-track.outputs.label }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/play"
+          cp android/app/build/outputs/bundle/release/app-release.aab "$RUNNER_TEMP/play/$AAB"
+          size="$(du -h "$RUNNER_TEMP/play/$AAB" | cut -f1)"
+          {
+            echo "### GRIDGO Admin $VERSION for Google Play"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| File | \`$AAB\` (in the artifact below) |"
+            echo "| versionCode | $CODE |"
+            echo "| Size | $size |"
+            echo "| Commit | \`$GITHUB_SHA\` |"
+            echo "| Signature | upload key, verified against the keystore alias |"
+            echo
+            if [ "$SUBMIT" = "true" ]; then
+              echo "EAS Submit uploads it to the $TRACK_LABEL track below."
+            else
+              echo "Upload it in Play Console under Testing. Nothing was published."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The bundle is the whole point of this run, so a failed upload fails it.
+      # An Actions artifact only, short-lived like the APK's.
+      - uses: actions/upload-artifact@v4
+        if: github.event.inputs.play_bundle == 'true'
+        with:
+          name: ${{ steps.config.outputs.stem }}-play
+          path: ${{ runner.temp }}/play/*.aab
+          if-no-files-found: error
+          retention-days: 7
+
+      # Only after the AAB is verified and kept as an artifact, so a failed
+      # submission still leaves the bundle to upload by hand. The track and
+      # release status live in eas.json: internal or alpha, both completed.
+      # Closed releases still require Google review; a draft would need a
+      # manual Play Console step for every submission.
+      #
+      # The service-account key is written outside the workspace, mode 600,
+      # and eas.json reads its path from GOOGLE_PLAY_SERVICE_ACCOUNT_KEY_PATH.
+      # Its content is never echoed; the trap removes it however the step ends,
+      # and the cleanup step below removes it again. eas-cli is pinned, so a
+      # new release cannot change what this step uploads. EAS_OWNER and
+      # EAS_PROJECT_ID link app.config.ts to the EAS project eas-cli submits as.
+      - name: Submit the Play bundle to ${{ steps.play-track.outputs.label }}
+        if: github.event.inputs.play_bundle == 'true' && github.event.inputs.submit_to_play == 'true'
+        env:
+          SUBMIT_PROFILE: ${{ steps.play-track.outputs.profile }}
+          PLAY_TRACK: ${{ steps.play-track.outputs.track }}
+          TRACK_LABEL: ${{ steps.play-track.outputs.label }}
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          GOOGLE_PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_PLAY_SERVICE_ACCOUNT_JSON }}
+          EAS_OWNER: ${{ vars.EAS_OWNER }}
+          EAS_PROJECT_ID: ${{ vars.EAS_PROJECT_ID }}
+          AAB: ${{ steps.config.outputs.aab }}
+          CODE: ${{ steps.config.outputs.code }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/play-service-account.json"
+          trap 'rm -f "$key"' EXIT
+          printf '%s' "$GOOGLE_PLAY_SERVICE_ACCOUNT_JSON" > "$key"
+          chmod 600 "$key"
+          unset GOOGLE_PLAY_SERVICE_ACCOUNT_JSON
+          # Checked quietly: a JSON parse error would quote part of the key.
+          if ! node -e '
+            try {
+              const k = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+              if (k.type !== "service_account" || !k.client_email || !k.private_key) process.exit(1);
+            } catch {
+              process.exit(1);
+            }
+          ' "$key" 2>/dev/null; then
+            echo "::error::GOOGLE_PLAY_SERVICE_ACCOUNT_JSON is not a Google service-account key"
+            exit 1
+          fi
+          export GOOGLE_PLAY_SERVICE_ACCOUNT_KEY_PATH="$key"
+
+          npx --yes eas-cli@24.12.1 submit \
+            --platform android \
+            --profile "$SUBMIT_PROFILE" \
+            --path "$RUNNER_TEMP/play/$AAB" \
+            --non-interactive \
+            --wait
+
+          {
+            echo
+            echo "Submitted \`$AAB\` (versionCode $CODE) to Google Play's **$TRACK_LABEL** track with EAS Submit."
+            if [ "$PLAY_TRACK" = "alpha" ]; then
+              echo "Google reviews closed releases before testers can access them."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the signing key, Firebase config and Play key
         if: always()
         run: |
           rm -f "$RUNNER_TEMP/release.jks" \
                 "$HOME/.gradle/gradle.properties" \
-                "$RUNNER_TEMP/google-services.json"
+                "$RUNNER_TEMP/google-services.json" \
+                "$RUNNER_TEMP/play-service-account.json"

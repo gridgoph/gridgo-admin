@@ -57,7 +57,7 @@ npm test -- --maxWorkers=2
 
 ## Release
 
-Pull requests and pushes to `dev`/`main` run `.github/workflows/test.yml`. A merge to `main` (or a manual run) runs `.github/workflows/android-release.yml`, which mirrors the other GRIDGO apps: signed release APK → verified with `scripts/verify-release-apk.sh` → Actions artifact (retained for 7 days).
+Pull requests and pushes to `dev`/`main` run `.github/workflows/test.yml`. A merge to `main` (or a manual run) runs `.github/workflows/android-release.yml`, which mirrors the other GRIDGO apps: signed release APK → verified with `scripts/verify-release-apk.sh` → Actions artifact (retained for 7 days). A manual run can build a Play bundle instead ([below](#google-play-test-track)).
 
 It needs these **repository secrets**; until they exist the release job fails at its first check, by design:
 
@@ -73,6 +73,31 @@ It needs these **repository secrets**; until they exist the release job fails at
 Admin APKs must never be published to the public GRIDGO download page. The public repository must not publish APKs through GitHub Releases either. The workflow keeps APKs only as seven-day Actions artifacts and has no server upload step or deploy credentials. Release signing credentials are supplied separately; no release key is stored in this repository.
 
 For local builds, set `GOOGLE_SERVICES_JSON` to the Firebase JSON file path or place a gitignored `google-services.json` in the repository root. An explicit missing path fails; development checks without a file remain supported. CI requires the secret and validates the Android package before prebuild. Firebase configuration alone does not add device-token registration or notification handling to the app.
+
+### Google Play test track
+
+Staff get the Admin App from a **private Play testing track** with only invited staff accounts added as testers (decided 18 Oct 2026, Q2 B). The workflow builds that bundle by hand on demand; the APK path above is unchanged.
+
+1. **Actions → Android release APK or Play testing bundle → Run workflow**, choose `main`, select **play_bundle**.
+2. The run builds `./gradlew bundleRelease` with the same upload key and public configuration as the APK, and `scripts/verify-release-apk.sh` checks the `.aab` the same way (signer = keystore alias; API URL and Clerk live key inlined in `base/assets/index.android.bundle`). The bundle is kept as the `gridgo-admin-<version>-<sha>-play` Actions artifact for 7 days. Without **submit_to_play** nothing else happens; upload it in Play Console → Testing by hand.
+3. With **submit_to_play** as well, [EAS Submit](https://docs.expo.dev/submit/android/) uploads that same verified `.aab` to **internal testing** (`eas.json` profile `production`, Play track `internal`) or, with **play_track: closed**, to **closed testing** (profile `closed`, track `alpha`). Both use release status `completed`; Google still reviews closed releases. The run summary names the track.
+
+- **Never the production track, never a promotion.** The track is an allowlist in the workflow; moving a build to another track is a manual Play Console step.
+- The build stays in GitHub Actions with the upload key. EAS only uploads the file; no keystore goes to Expo. `eas-cli` is pinned.
+- **versionCode** is the workflow run number (`GRIDGO_BUILD_NUMBER`, see `app.config.ts`), shared by APK and AAB runs, so each new run is higher. Upload bundles oldest first; a **Re-run** keeps its number, so start a new run instead. Keep the workflow file where it is (renaming it restarts the count).
+- No release notes are set on the Play release.
+
+**Values the captain must supply before the first `submit_to_play` run** (until then that run fails at its first step, before the build, naming whatever is missing; a `play_bundle` run without submit needs none of them):
+
+| Where | Name | What |
+|---|---|---|
+| Play Console | app `ph.gridgo.admin` | The app registered, with the internal (or closed) testing track's tester list holding only invited staff accounts. The first bundle may have to be uploaded by hand before the API accepts uploads. |
+| Repository secret | `EXPO_TOKEN` | Expo access token for the account that owns the EAS project |
+| Repository secret | `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` | Play service-account JSON key with release permission for testing tracks. Written mode 600 under `$RUNNER_TEMP` for that step only, never printed, then removed. |
+| Repository **variable** | `EAS_OWNER` | Expo account name that owns the EAS project for `gridgo-admin` |
+| Repository **variable** | `EAS_PROJECT_ID` | That EAS project's UUID (the project must use slug `gridgo-admin`) |
+
+`EAS_OWNER`/`EAS_PROJECT_ID` are public identifiers, so they are variables, not secrets. They are deliberately not committed to `app.json`: `app.config.ts` (`easProject`) sets `owner` and `extra.eas.projectId` from them when both are present, refuses only one or a malformed value, and leaves every other build unlinked.
 
 ## Project notes
 
