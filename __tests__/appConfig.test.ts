@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 
-import { buildVersion, clerkPublishableKey, googleServicesFile } from "../app.config";
+import { buildVersion, clerkPublishableKey, easProject, googleServicesFile } from "../app.config";
 import { clerkPublishableKey as runtimeClerkKey } from "@/lib/clerkAuth";
 
 const root = join(__dirname, "..");
@@ -21,6 +21,23 @@ describe("build identity", () => {
     expect(appJson.android.package).toBe("ph.gridgo.admin");
     expect(appJson.ios.bundleIdentifier).toBe("ph.gridgo.admin");
     expect(appJson.scheme).toBe("gridgoadmin");
+  });
+});
+
+describe("EAS project link (Play upload only)", () => {
+  const id = "0f8fad5b-d9cb-469f-a165-70867728950e";
+
+  it("is absent until the captain supplies both repository variables", () => {
+    expect(easProject(undefined, undefined)).toBeUndefined();
+    expect(easProject(" ", "")).toBeUndefined();
+    expect(easProject(" gridgo ", ` ${id} `)).toEqual({ owner: "gridgo", projectId: id });
+  });
+
+  it("refuses half a link or a malformed value", () => {
+    expect(() => easProject("gridgo", undefined)).toThrow(/both/);
+    expect(() => easProject(undefined, id)).toThrow(/both/);
+    expect(() => easProject("gridgo", "not-a-uuid")).toThrow(/UUID/);
+    expect(() => easProject("@gridgo/x", id)).toThrow(/account name/);
   });
 });
 
